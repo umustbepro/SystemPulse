@@ -10,13 +10,13 @@ internal sealed class StorageTelemetryReader
         try
         {
             var counters = ReadReliabilityCounters();
-            var smartTemperatures = ReadSmartTemperatures();
-            var devices = ReadPhysicalDisks(counters, smartTemperatures);
-            return devices.Count > 0 ? devices : ReadDiskDriveFallback(smartTemperatures);
+            var smartData = ReadSmartData();
+            var devices = ReadPhysicalDisks(counters, smartData);
+            return devices.Count > 0 ? devices : ReadDiskDriveFallback(smartData);
         }
         catch
         {
-            return ReadDiskDriveFallback(ReadSmartTemperatures());
+            return ReadDiskDriveFallback(ReadSmartData());
         }
     }
 
@@ -27,7 +27,7 @@ internal sealed class StorageTelemetryReader
             var counters = new Dictionary<string, ReliabilityCounter>(StringComparer.OrdinalIgnoreCase);
             using var searcher = new ManagementObjectSearcher(
                 @"root\Microsoft\Windows\Storage",
-                "SELECT DeviceId, Temperature, TemperatureMax, Wear FROM MSFT_StorageReliabilityCounter");
+                "SELECT DeviceId, Temperature, TemperatureMax, Wear, PowerOnHours, ReadErrorsTotal, ReadErrorsUncorrected, WriteErrorsTotal, WriteErrorsUncorrected FROM MSFT_StorageReliabilityCounter");
             using var results = searcher.Get();
 
             foreach (ManagementObject item in results)
@@ -52,12 +52,12 @@ internal sealed class StorageTelemetryReader
 
     private static List<StorageDeviceSnapshot> ReadPhysicalDisks(
         IReadOnlyDictionary<string, ReliabilityCounter> counters,
-        IReadOnlyDictionary<string, float> smartTemperatures)
+        IReadOnlyDictionary<string, SmartFallback> smartData)
     {
         var devices = new List<StorageDeviceSnapshot>();
         using var searcher = new ManagementObjectSearcher(
             @"root\Microsoft\Windows\Storage",
-            "SELECT DeviceId, FriendlyName, Size, MediaType, BusType, HealthStatus FROM MSFT_PhysicalDisk");
+            "SELECT DeviceId, FriendlyName, Size, MediaType, BusType, HealthStatus, SerialNumber, FirmwareVersion, OperationalStatus, PhysicalLocation FROM MSFT_PhysicalDisk");
         using var results = searcher.Get();
 
         foreach (ManagementObject item in results)
@@ -70,9 +70,24 @@ internal sealed class StorageTelemetryReader
 
                 counters.TryGetValue(id, out var directCounter);
                 var relatedCounter = ReadRelatedCounter(item);
-                var temperature = relatedCounter?.Temperature ?? directCounter?.Temperature;
-                if (!temperature.HasValue && smartTemperatures.TryGetValue(id, out var smartTemperature))
-                    temperature = smartTemperature;
+                var counter = relatedCounter ?? directCounter;
+                smartData.TryGetValue(id, out var ataSmart);
+                var nvme = int.TryParse(id, out var physicalDriveNumber)
+                    ? NvmeHealthReader.Read(physicalDriveNumber)
+                    : null;
+                var temperature = nvme?.Temperature ?? counter?.Temperature ?? ataSmart?.Temperature;
+                var wear = nvme?.PercentageUsed ?? counter?.Wear ?? ataSmart?.Wear;
+                var powerOnHours = nvme is not null
+                    ? nvme.PowerOnHours
+                    : PreferPositive(counter?.PowerOnHours, ataSmart?.PowerOnHours);
+                var health = nvme?.CriticalWarning > 0
+                    ? "Warning"
+                    : FormatHealth(ReadUshort(item, "HealthStatus"));
+                var healthSource = nvme is not null
+                    ? "Direct NVMe SMART / Health log"
+                    : ataSmart is not null
+                        ? "Legacy ATA SMART attributes"
+                        : "Windows storage reliability provider";
                 var name = ReadString(item, "FriendlyName");
                 devices.Add(new StorageDeviceSnapshot(
                     id,
@@ -81,8 +96,28 @@ internal sealed class StorageTelemetryReader
                     FormatMediaType(ReadUshort(item, "MediaType")),
                     FormatBusType(ReadUshort(item, "BusType")),
                     temperature,
-                    FormatHealth(ReadUshort(item, "HealthStatus")),
-                    relatedCounter?.Wear ?? directCounter?.Wear));
+                    health,
+                    wear,
+                    counter?.TemperatureMaximum,
+                    powerOnHours,
+                    counter?.ReadErrorsTotal,
+                    counter?.ReadErrorsUncorrected ?? nvme?.MediaErrors,
+                    counter?.WriteErrorsTotal,
+                    counter?.WriteErrorsUncorrected,
+                    ValueOrUnavailable(ReadString(item, "SerialNumber")),
+                    ValueOrUnavailable(ReadString(item, "FirmwareVersion")),
+                    FormatOperationalStatus(item["OperationalStatus"]),
+                    ValueOrUnavailable(ReadString(item, "PhysicalLocation")),
+                    nvme?.UnsafeShutdowns,
+                    healthSource,
+                    nvme?.MediaErrors,
+                    nvme?.ErrorLogEntries,
+                    ataSmart?.ReallocatedSectors,
+                    ataSmart?.ReallocationEvents,
+                    ataSmart?.PendingSectors,
+                    ataSmart?.OfflineUncorrectable,
+                    ataSmart?.ReportedUncorrectable,
+                    ataSmart?.CrcErrors));
             }
         }
 
@@ -90,14 +125,14 @@ internal sealed class StorageTelemetryReader
     }
 
     private static IReadOnlyList<StorageDeviceSnapshot> ReadDiskDriveFallback(
-        IReadOnlyDictionary<string, float> smartTemperatures)
+        IReadOnlyDictionary<string, SmartFallback> smartData)
     {
         try
         {
             var devices = new List<StorageDeviceSnapshot>();
             using var searcher = new ManagementObjectSearcher(
                 @"root\cimv2",
-                "SELECT Index, Model, Size, InterfaceType, Status FROM Win32_DiskDrive");
+                "SELECT Index, Model, Size, InterfaceType, Status, SerialNumber, FirmwareRevision, PNPDeviceID FROM Win32_DiskDrive");
             using var results = searcher.Get();
 
             foreach (ManagementObject item in results)
@@ -106,16 +141,40 @@ internal sealed class StorageTelemetryReader
                 {
                     var id = ReadString(item, "Index");
                     var name = ReadString(item, "Model");
-                    smartTemperatures.TryGetValue(id, out var smartTemperature);
+                    smartData.TryGetValue(id, out var ataSmart);
+                    var nvme = int.TryParse(id, out var physicalDriveNumber)
+                        ? NvmeHealthReader.Read(physicalDriveNumber)
+                        : null;
+                    var healthSource = nvme is not null
+                        ? "Direct NVMe SMART / Health log"
+                        : ataSmart is not null
+                            ? "Legacy ATA SMART attributes"
+                            : "Windows disk provider";
                     devices.Add(new StorageDeviceSnapshot(
                         string.IsNullOrWhiteSpace(id) ? Guid.NewGuid().ToString("N") : id,
                         string.IsNullOrWhiteSpace(name) ? "Physical storage device" : name,
                         ReadUlong(item, "Size"),
                         "Storage",
                         ReadString(item, "InterfaceType"),
-                        smartTemperature is > 0 ? smartTemperature : null,
-                        ReadString(item, "Status") is { Length: > 0 } status ? status : "Unknown",
-                        null));
+                        nvme?.Temperature ?? ataSmart?.Temperature,
+                        nvme?.CriticalWarning > 0 ? "Warning" : ReadString(item, "Status") is { Length: > 0 } status ? status : "Unknown",
+                        nvme?.PercentageUsed ?? ataSmart?.Wear,
+                        PowerOnHours: nvme?.PowerOnHours ?? ataSmart?.PowerOnHours,
+                        ReadErrorsUncorrected: nvme?.MediaErrors,
+                        SerialNumber: ValueOrUnavailable(ReadString(item, "SerialNumber")),
+                        FirmwareVersion: ValueOrUnavailable(ReadString(item, "FirmwareRevision")),
+                        OperationalStatus: ValueOrUnavailable(ReadString(item, "Status")),
+                        PhysicalLocation: ValueOrUnavailable(ReadString(item, "PNPDeviceID")),
+                        UnsafeShutdowns: nvme?.UnsafeShutdowns,
+                        HealthDataSource: healthSource,
+                        NvmeMediaErrors: nvme?.MediaErrors,
+                        NvmeErrorLogEntries: nvme?.ErrorLogEntries,
+                        ReallocatedSectors: ataSmart?.ReallocatedSectors,
+                        ReallocationEvents: ataSmart?.ReallocationEvents,
+                        PendingSectors: ataSmart?.PendingSectors,
+                        OfflineUncorrectable: ataSmart?.OfflineUncorrectable,
+                        ReportedUncorrectable: ataSmart?.ReportedUncorrectable,
+                        CrcErrors: ataSmart?.CrcErrors));
                 }
             }
 
@@ -150,14 +209,19 @@ internal sealed class StorageTelemetryReader
         new(
             NormalizeTemperature(ReadByte(item, "Temperature")),
             NormalizeTemperature(ReadByte(item, "TemperatureMax")),
-            ReadByte(item, "Wear"));
+            ReadByte(item, "Wear"),
+            ReadUlong(item, "PowerOnHours"),
+            ReadUlong(item, "ReadErrorsTotal"),
+            ReadUlong(item, "ReadErrorsUncorrected"),
+            ReadUlong(item, "WriteErrorsTotal"),
+            ReadUlong(item, "WriteErrorsUncorrected"));
 
-    private static IReadOnlyDictionary<string, float> ReadSmartTemperatures()
+    private static IReadOnlyDictionary<string, SmartFallback> ReadSmartData()
     {
         try
         {
             var identities = ReadDiskIdentities();
-            var samples = new List<(string InstanceKey, float Temperature)>();
+            var samples = new List<(string InstanceKey, SmartFallback Data)>();
             using var searcher = new ManagementObjectSearcher(
                 @"root\WMI",
                 "SELECT InstanceName, VendorSpecific FROM MSStorageDriver_FailurePredictData");
@@ -170,28 +234,28 @@ internal sealed class StorageTelemetryReader
                     if (item["VendorSpecific"] is not byte[] data)
                         continue;
 
-                    var temperature = ParseSmartTemperature(data);
-                    if (temperature.HasValue)
-                        samples.Add((NormalizeDeviceKey(ReadString(item, "InstanceName")), temperature.Value));
+                    var parsed = ParseSmartData(data);
+                    if (parsed is not null)
+                        samples.Add((NormalizeDeviceKey(ReadString(item, "InstanceName")), parsed));
                 }
             }
 
-            var temperatures = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+            var values = new Dictionary<string, SmartFallback>(StringComparer.OrdinalIgnoreCase);
             foreach (var identity in identities)
             {
                 var pnpKey = NormalizeDeviceKey(identity.PnpDeviceId);
                 var sample = samples.FirstOrDefault(candidate =>
                     candidate.InstanceKey.Contains(pnpKey, StringComparison.OrdinalIgnoreCase) ||
                     pnpKey.Contains(candidate.InstanceKey, StringComparison.OrdinalIgnoreCase));
-                if (sample.Temperature is > 0)
-                    temperatures[identity.DeviceId] = sample.Temperature;
+                if (sample.Data is not null)
+                    values[identity.DeviceId] = sample.Data;
             }
 
-            return temperatures;
+            return values;
         }
         catch
         {
-            return new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+            return new Dictionary<string, SmartFallback>(StringComparer.OrdinalIgnoreCase);
         }
     }
 
@@ -217,26 +281,66 @@ internal sealed class StorageTelemetryReader
         return identities;
     }
 
-    private static float? ParseSmartTemperature(byte[] data)
+    private static SmartFallback? ParseSmartData(byte[] data)
     {
-        float? fallback = null;
+        float? temperature = null;
+        float? fallbackTemperature = null;
+        ulong? powerOnHours = null;
+        byte? wear = null;
+        ulong? reallocatedSectors = null;
+        ulong? reallocationEvents = null;
+        ulong? pendingSectors = null;
+        ulong? offlineUncorrectable = null;
+        ulong? reportedUncorrectable = null;
+        ulong? crcErrors = null;
         for (var offset = 2; offset + 11 < data.Length; offset += 12)
         {
             var attributeId = data[offset];
-            if (attributeId is not (190 or 194))
-                continue;
+            var currentValue = data[offset + 3];
+            var rawValue = ReadSixByteValue(data, offset + 5);
+            if (attributeId == 9 && rawValue is > 0 and < 10_000_000)
+                powerOnHours = rawValue;
+            else if (attributeId is 177 or 231 or 233 && currentValue is > 0 and <= 100)
+                wear = (byte)(100 - currentValue);
+            else if (attributeId is 190 or 194)
+            {
+                var rawTemperature = data[offset + 5];
+                if (rawTemperature is > 0 and < 130)
+                {
+                    if (attributeId == 194) temperature = rawTemperature;
+                    else fallbackTemperature = rawTemperature;
+                }
+            }
 
-            var rawTemperature = data[offset + 5];
-            if (rawTemperature is <= 0 or >= 130)
-                continue;
-
-            if (attributeId == 194)
-                return rawTemperature;
-            fallback = rawTemperature;
+            switch (attributeId)
+            {
+                case 5: reallocatedSectors = rawValue; break;
+                case 187: reportedUncorrectable = rawValue; break;
+                case 196: reallocationEvents = rawValue; break;
+                case 197: pendingSectors = rawValue; break;
+                case 198: offlineUncorrectable = rawValue; break;
+                case 199: crcErrors = rawValue; break;
+            }
         }
-
-        return fallback;
+        temperature ??= fallbackTemperature;
+        return temperature.HasValue || powerOnHours.HasValue || wear.HasValue ||
+               reallocatedSectors.HasValue || reallocationEvents.HasValue || pendingSectors.HasValue ||
+               offlineUncorrectable.HasValue || reportedUncorrectable.HasValue || crcErrors.HasValue
+            ? new SmartFallback(temperature, wear, powerOnHours, reallocatedSectors, reallocationEvents,
+                pendingSectors, offlineUncorrectable, reportedUncorrectable, crcErrors)
+            : null;
     }
+
+    private static ulong ReadSixByteValue(byte[] data, int offset)
+    {
+        ulong value = 0;
+        for (var index = 0; index < 6; index++)
+            value |= (ulong)data[offset + index] << (index * 8);
+        return value;
+    }
+
+    private static ulong? PreferPositive(ulong? primary, ulong? fallback) =>
+        primary is > 0 ? primary : fallback is > 0 ? fallback : null;
 
     private static string NormalizeDeviceKey(string value) =>
         new(value.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
@@ -271,6 +375,29 @@ internal sealed class StorageTelemetryReader
         _ => "Unknown"
     };
 
+    private static string FormatOperationalStatus(object? value)
+    {
+        if (value is not ushort[] statuses || statuses.Length == 0)
+            return "Unknown";
+        return string.Join(", ", statuses.Select(status => status switch
+        {
+            2 => "OK",
+            3 => "Degraded",
+            5 => "Predictive failure",
+            6 => "Error",
+            8 => "Starting",
+            9 => "Stopping",
+            10 => "Stopped",
+            11 => "In service",
+            15 => "Dormant",
+            17 => "Completed",
+            18 => "Power mode",
+            _ => $"Status {status}"
+        }));
+    }
+
+    private static string ValueOrUnavailable(string value) => string.IsNullOrWhiteSpace(value) ? "Not reported" : value;
+
     private static string ReadString(ManagementBaseObject item, string name) =>
         Convert.ToString(item[name])?.Trim() ?? string.Empty;
 
@@ -283,6 +410,24 @@ internal sealed class StorageTelemetryReader
     private static ulong? ReadUlong(ManagementBaseObject item, string name) =>
         item[name] is null ? null : Convert.ToUInt64(item[name]);
 
-    private sealed record ReliabilityCounter(float? Temperature, float? TemperatureMax, byte? Wear);
+    private sealed record ReliabilityCounter(
+        float? Temperature,
+        float? TemperatureMaximum,
+        byte? Wear,
+        ulong? PowerOnHours,
+        ulong? ReadErrorsTotal,
+        ulong? ReadErrorsUncorrected,
+        ulong? WriteErrorsTotal,
+        ulong? WriteErrorsUncorrected);
+    private sealed record SmartFallback(
+        float? Temperature,
+        byte? Wear,
+        ulong? PowerOnHours,
+        ulong? ReallocatedSectors,
+        ulong? ReallocationEvents,
+        ulong? PendingSectors,
+        ulong? OfflineUncorrectable,
+        ulong? ReportedUncorrectable,
+        ulong? CrcErrors);
     private sealed record DiskIdentity(string DeviceId, string PnpDeviceId);
 }

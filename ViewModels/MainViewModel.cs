@@ -16,6 +16,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 {
     private const int HistoryLimit = 60;
     private readonly HardwareMonitorService _monitor;
+    private readonly ProcessTelemetryService _processTelemetry = new();
+    private readonly NetworkTelemetryService _networkTelemetry = new();
+    private readonly TelemetryHistoryService _history = new();
+    private readonly AlertService _alerts = new();
+    private readonly SettingsService _settingsService = new();
+    private readonly AppSettings _settings;
     private readonly DispatcherTimer _timer;
     private readonly Dictionary<string, Queue<double>> _storageHistoryByDevice = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Queue<double>> _storageLoadHistoryByDevice = new(StringComparer.OrdinalIgnoreCase);
@@ -73,11 +79,17 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private bool _isPawnIoReady;
     private string _driverStatus = "Detecting PawnIO";
     private string _cpuSensorSummary = "Detecting logical processors";
+    private string _historyStatus = "Waiting for the first persistent sample";
+    private string _processSummary = "Collecting process activity";
+    private string _networkSummary = "Collecting adapter activity";
+    private string _storageSummary = "Detecting physical drives";
 
     public MainViewModel()
     {
+        _settings = _settingsService.Load();
         StorageCleanup = new StorageCleanupViewModel();
         _monitor = new HardwareMonitorService();
+        _refreshSeconds = Math.Clamp(_settings.RefreshSeconds, 1, 30);
         _timer = new DispatcherTimer(DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromSeconds(_refreshSeconds)
@@ -87,9 +99,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         RefreshCommand = new RelayCommand(async _ => await RefreshAsync(), _ => !_isReading);
         RestartElevatedCommand = new RelayCommand(_ => RestartElevated());
         InstallPawnIoCommand = new RelayCommand(async _ => await InstallPawnIoAsync(force: true));
+        ExportHistoryCommand = new RelayCommand(_ => ExportHistory());
+        OpenHistoryFolderCommand = new RelayCommand(_ => OpenHistoryFolder());
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
+    public event EventHandler<MonitorAlert>? AlertRaised;
 
     public StorageCleanupViewModel StorageCleanup { get; }
 
@@ -104,10 +119,16 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<double> StorageLoadHistory { get; } = new();
     public ObservableCollection<StorageDeviceItem> StorageDevices { get; } = new();
     public ObservableCollection<FrameApplicationItem> FrameApplications { get; } = new();
+    public ObservableCollection<ProcessTelemetryItem> Processes { get; } = new();
+    public ObservableCollection<NetworkAdapterItem> NetworkAdapters { get; } = new();
+    public ObservableCollection<HistoryItem> RecentHistory { get; } = new();
+    public ObservableCollection<AlertItem> RecentAlerts { get; } = new();
 
     public ICommand RefreshCommand { get; }
     public ICommand RestartElevatedCommand { get; }
     public ICommand InstallPawnIoCommand { get; }
+    public ICommand ExportHistoryCommand { get; }
+    public ICommand OpenHistoryFolderCommand { get; }
 
     public string LastUpdated { get => _lastUpdated; private set => Set(ref _lastUpdated, value); }
     public string StatusMessage { get => _statusMessage; private set => Set(ref _statusMessage, value); }
@@ -178,21 +199,71 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public string AccessLabel => IsPawnIoReady ? "PawnIO sensor driver ready" : "PawnIO sensor driver required";
     public string DriverActionLabel => IsPawnIoReady ? "Reinstall PawnIO" : "Install PawnIO";
     public string RefreshLabel => $"Every {RefreshSeconds} seconds";
+    public string HistoryStatus { get => _historyStatus; private set => Set(ref _historyStatus, value); }
+    public string ProcessSummary { get => _processSummary; private set => Set(ref _processSummary, value); }
+    public string NetworkSummary { get => _networkSummary; private set => Set(ref _networkSummary, value); }
+    public string StorageSummary { get => _storageSummary; private set => Set(ref _storageSummary, value); }
+
+    public bool AlertsEnabled
+    {
+        get => _settings.AlertsEnabled;
+        set { if (_settings.AlertsEnabled == value) return; _settings.AlertsEnabled = value; SaveSetting(); OnPropertyChanged(); }
+    }
+
+    public bool MinimizeToTray
+    {
+        get => _settings.MinimizeToTray;
+        set { if (_settings.MinimizeToTray == value) return; _settings.MinimizeToTray = value; SaveSetting(); OnPropertyChanged(); }
+    }
+
+    public bool StartMinimized
+    {
+        get => _settings.StartMinimized;
+        set { if (_settings.StartMinimized == value) return; _settings.StartMinimized = value; SaveSetting(); OnPropertyChanged(); }
+    }
+
+    public int CpuAlertThreshold
+    {
+        get => _settings.CpuTemperatureAlert;
+        set { value = Math.Clamp(value, 40, 110); if (_settings.CpuTemperatureAlert == value) return; _settings.CpuTemperatureAlert = value; SaveSetting(); OnPropertyChanged(); }
+    }
+
+    public int GpuAlertThreshold
+    {
+        get => _settings.GpuTemperatureAlert;
+        set { value = Math.Clamp(value, 40, 110); if (_settings.GpuTemperatureAlert == value) return; _settings.GpuTemperatureAlert = value; SaveSetting(); OnPropertyChanged(); }
+    }
+
+    public int StorageAlertThreshold
+    {
+        get => _settings.StorageTemperatureAlert;
+        set { value = Math.Clamp(value, 35, 100); if (_settings.StorageTemperatureAlert == value) return; _settings.StorageTemperatureAlert = value; SaveSetting(); OnPropertyChanged(); }
+    }
+
+    public int HistoryRetentionDays
+    {
+        get => _settings.HistoryRetentionDays;
+        set { value = Math.Clamp(value, 1, 90); if (_settings.HistoryRetentionDays == value) return; _settings.HistoryRetentionDays = value; SaveSetting(); OnPropertyChanged(); }
+    }
 
     public int RefreshSeconds
     {
         get => _refreshSeconds;
         set
         {
+            value = Math.Clamp(value, 1, 30);
             if (!Set(ref _refreshSeconds, value))
                 return;
             _timer.Interval = TimeSpan.FromSeconds(value);
+            _settings.RefreshSeconds = value;
+            SaveSetting();
             OnPropertyChanged(nameof(RefreshLabel));
         }
     }
 
     public async Task StartAsync()
     {
+        LoadRecentHistory();
         var installation = await PawnIoInstaller.EnsureInstalledAsync();
         await RefreshAsync();
         if (!installation.Success || installation.RebootRequired)
@@ -209,8 +280,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         CommandManager.InvalidateRequerySuggested();
         try
         {
-            var snapshot = await Task.Run(_monitor.Read);
-            Apply(snapshot);
+            var snapshotTask = Task.Run(_monitor.Read);
+            var processTask = Task.Run(_processTelemetry.Read);
+            var networkTask = Task.Run(_networkTelemetry.Read);
+            await Task.WhenAll(snapshotTask, processTask, networkTask);
+            Apply(snapshotTask.Result);
+            UpdateProcesses(processTask.Result);
+            UpdateNetworkAdapters(networkTask.Result);
         }
         finally
         {
@@ -275,6 +351,23 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         ApplySelectedStorageDevice(addHistory: false);
         AddHistory(MotherboardTemperatureHistory, snapshot.MotherboardTemperature);
         EvaluateSystemHealth(snapshot);
+
+        var historySample = new HistorySample(
+            snapshot.Timestamp, snapshot.CpuTemperature, snapshot.CpuLoad, snapshot.GpuTemperature,
+            snapshot.GpuLoad, snapshot.MemoryLoad, SelectedStorageDevice?.Temperature, SelectedStorageDevice?.Load);
+        if (_history.TryAppend(historySample, HistoryRetentionDays))
+        {
+            RecentHistory.Add(new HistoryItem(historySample));
+            while (RecentHistory.Count > 120) RecentHistory.RemoveAt(0);
+            HistoryStatus = $"Saved {RecentHistory.Count} recent samples · retaining {HistoryRetentionDays} day(s)";
+        }
+
+        foreach (var alert in _alerts.Evaluate(snapshot, _settings))
+        {
+            RecentAlerts.Insert(0, new AlertItem(alert));
+            while (RecentAlerts.Count > 25) RecentAlerts.RemoveAt(RecentAlerts.Count - 1);
+            AlertRaised?.Invoke(this, alert);
+        }
 
         if (!string.IsNullOrWhiteSpace(snapshot.Error))
             StatusMessage = $"Sensor read error: {snapshot.Error}";
@@ -397,9 +490,94 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             StorageDevices.Add(new StorageDeviceItem(device, devicePerformance));
         }
 
+        var warnings = devices.Count(device => device.Health is "Warning" or "Unhealthy");
+        var directSmart = devices.Count(device => device.HealthDataSource.StartsWith("Direct", StringComparison.OrdinalIgnoreCase));
+        StorageSummary = devices.Count == 0
+            ? "Windows did not expose any physical drives"
+            : warnings == 0
+                ? $"{devices.Count} physical drive(s) · {directSmart} direct SMART · no health warnings"
+                : $"{devices.Count} physical drive(s) · {directSmart} direct SMART · {warnings} health warning(s)";
+
         SelectedStorageDevice = StorageDevices.FirstOrDefault(device => device.DeviceId == selectedId)
             ?? StorageDevices.FirstOrDefault();
     }
+
+    private void UpdateProcesses(IReadOnlyList<ProcessTelemetrySnapshot> snapshots)
+    {
+        Processes.Clear();
+        foreach (var snapshot in snapshots)
+            Processes.Add(new ProcessTelemetryItem(snapshot));
+
+        var busiest = snapshots.FirstOrDefault();
+        ProcessSummary = busiest is null
+            ? "No process telemetry is available"
+            : $"{snapshots.Count} active entries · highest CPU: {busiest.Name} ({busiest.CpuPercent:0.0}%)";
+    }
+
+    private void UpdateNetworkAdapters(IReadOnlyList<NetworkAdapterSnapshot> snapshots)
+    {
+        NetworkAdapters.Clear();
+        foreach (var snapshot in snapshots)
+            NetworkAdapters.Add(new NetworkAdapterItem(snapshot));
+
+        var active = snapshots.Where(item => item.Status == "Up").ToList();
+        var down = active.Aggregate(0UL, (total, item) => total + item.ReceivedBytesPerSecond);
+        var up = active.Aggregate(0UL, (total, item) => total + item.SentBytesPerSecond);
+        NetworkSummary = $"{active.Count} active adapter(s) · down {FormatRate(down)} · up {FormatRate(up)}";
+    }
+
+    private void LoadRecentHistory()
+    {
+        try
+        {
+            RecentHistory.Clear();
+            foreach (var sample in _history.ReadRecent())
+                RecentHistory.Add(new HistoryItem(sample));
+            HistoryStatus = RecentHistory.Count == 0
+                ? "History is enabled; a sample is saved every 10 seconds"
+                : $"Loaded {RecentHistory.Count} recent samples · retaining {HistoryRetentionDays} day(s)";
+        }
+        catch (Exception exception)
+        {
+            HistoryStatus = $"History could not be loaded: {exception.Message}";
+        }
+    }
+
+    private void ExportHistory()
+    {
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "Export SystemPulse history",
+            Filter = "CSV file (*.csv)|*.csv",
+            FileName = $"SystemPulse-history-{DateTime.Now:yyyyMMdd-HHmm}.csv",
+            AddExtension = true,
+            DefaultExt = ".csv"
+        };
+        if (dialog.ShowDialog() != true) return;
+        try
+        {
+            _history.Export(dialog.FileName);
+            HistoryStatus = $"History exported to {dialog.FileName}";
+        }
+        catch (Exception exception)
+        {
+            HistoryStatus = $"Export failed: {exception.Message}";
+        }
+    }
+
+    private void OpenHistoryFolder()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(_history.Folder) { UseShellExecute = true });
+        }
+        catch (Exception exception)
+        {
+            HistoryStatus = $"Could not open history folder: {exception.Message}";
+        }
+    }
+
+    private void SaveSetting() => _settingsService.Save(_settings);
 
     private void ApplySelectedStorageDevice(bool addHistory)
     {
@@ -419,7 +597,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
         StorageTemperature = FormatTemperature(device.Temperature);
         StorageDetails = $"{device.MediaType} · {device.BusType} · {FormatSize(device.SizeBytes)} · {device.Health}";
-        (StorageStatus, StorageStatusColor) = GetTemperatureStatus(device.Temperature, 55, 70);
+        (StorageStatus, StorageStatusColor) = device.Health switch
+        {
+            "Unhealthy" => ("Unhealthy", "#FF6B7A"),
+            "Warning" => ("Warning", "#FFB454"),
+            _ => GetTemperatureStatus(device.Temperature, 55, 70)
+        };
         OnPropertyChanged(nameof(StorageStatus));
         OnPropertyChanged(nameof(StorageStatusColor));
         StorageLoad = FormatPercent(device.Load);
@@ -564,7 +747,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             if (string.IsNullOrWhiteSpace(executable))
                 return;
             Process.Start(new ProcessStartInfo(executable) { UseShellExecute = true, Verb = "runas" });
-            Application.Current.Shutdown();
+            System.Windows.Application.Current.Shutdown();
         }
         catch (Win32Exception exception) when (exception.NativeErrorCode == 1223)
         {
@@ -609,6 +792,26 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             Temperature = device.Temperature;
             Health = device.Health;
             Wear = device.Wear;
+            TemperatureMaximum = device.TemperatureMaximum;
+            PowerOnHours = device.PowerOnHours;
+            ReadErrorsTotal = device.ReadErrorsTotal;
+            ReadErrorsUncorrected = device.ReadErrorsUncorrected;
+            WriteErrorsTotal = device.WriteErrorsTotal;
+            WriteErrorsUncorrected = device.WriteErrorsUncorrected;
+            SerialNumber = device.SerialNumber;
+            FirmwareVersion = device.FirmwareVersion;
+            OperationalStatus = device.OperationalStatus;
+            PhysicalLocation = device.PhysicalLocation;
+            UnsafeShutdowns = device.UnsafeShutdowns;
+            HealthDataSource = device.HealthDataSource;
+            NvmeMediaErrors = device.NvmeMediaErrors;
+            NvmeErrorLogEntries = device.NvmeErrorLogEntries;
+            ReallocatedSectors = device.ReallocatedSectors;
+            ReallocationEvents = device.ReallocationEvents;
+            PendingSectors = device.PendingSectors;
+            OfflineUncorrectable = device.OfflineUncorrectable;
+            ReportedUncorrectable = device.ReportedUncorrectable;
+            CrcErrors = device.CrcErrors;
             Load = performance?.Load;
             ReadBytesPerSecond = performance?.ReadBytesPerSecond;
             WriteBytesPerSecond = performance?.WriteBytesPerSecond;
@@ -622,9 +825,82 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         public float? Temperature { get; }
         public string Health { get; }
         public byte? Wear { get; }
+        public float? TemperatureMaximum { get; }
+        public ulong? PowerOnHours { get; }
+        public ulong? ReadErrorsTotal { get; }
+        public ulong? ReadErrorsUncorrected { get; }
+        public ulong? WriteErrorsTotal { get; }
+        public ulong? WriteErrorsUncorrected { get; }
+        public string SerialNumber { get; }
+        public string FirmwareVersion { get; }
+        public string OperationalStatus { get; }
+        public string PhysicalLocation { get; }
+        public ulong? UnsafeShutdowns { get; }
+        public string HealthDataSource { get; }
+        public ulong? NvmeMediaErrors { get; }
+        public ulong? NvmeErrorLogEntries { get; }
+        public ulong? ReallocatedSectors { get; }
+        public ulong? ReallocationEvents { get; }
+        public ulong? PendingSectors { get; }
+        public ulong? OfflineUncorrectable { get; }
+        public ulong? ReportedUncorrectable { get; }
+        public ulong? CrcErrors { get; }
         public float? Load { get; }
         public ulong? ReadBytesPerSecond { get; }
         public ulong? WriteBytesPerSecond { get; }
+        private bool SupportsWearIndicator => MediaType is "SSD" or "Storage-class memory" || BusType == "NVMe";
+        public string RemainingLife => !SupportsWearIndicator
+            ? "Not applicable"
+            : PowerOnHours is > 50_000 && Wear == 0
+                ? "Unverified"
+                : Wear.HasValue ? $"{Math.Max(0, 100 - Wear.Value)}% reported" : "Not reported";
+        public string WearText => !SupportsWearIndicator
+            ? "HDD health uses sector errors"
+            : Wear.HasValue
+                ? PowerOnHours is > 50_000 && Wear == 0
+                    ? "Drive reports 100% · conflicts with high hours"
+                    : $"{Wear.Value}% used · usage-based"
+                : "Drive did not expose wear";
+        public string PowerOnHoursText => PowerOnHours.HasValue ? $"{PowerOnHours:N0} hours" : "Not reported";
+        public string MaximumTemperatureText => TemperatureMaximum.HasValue ? $"{TemperatureMaximum:0} °C" : "Not reported";
+        private bool HasNvmeReliability => NvmeMediaErrors.HasValue || NvmeErrorLogEntries.HasValue;
+        private bool HasAtaReliability => ReallocatedSectors.HasValue || ReallocationEvents.HasValue || PendingSectors.HasValue ||
+                                          OfflineUncorrectable.HasValue || ReportedUncorrectable.HasValue || CrcErrors.HasValue;
+        private ulong AtaUncorrectable => (OfflineUncorrectable ?? 0) + (ReportedUncorrectable ?? 0);
+        public string ReliabilityErrorHeadline => HasNvmeReliability
+            ? $"Media errors {(NvmeMediaErrors ?? 0):N0} · error-log entries {(NvmeErrorLogEntries ?? 0):N0}"
+            : HasAtaReliability
+                ? $"Reallocated {(ReallocatedSectors ?? 0):N0} · pending {(PendingSectors ?? 0):N0} · uncorrectable {AtaUncorrectable:N0}"
+                : ReadErrorsTotal.HasValue || WriteErrorsTotal.HasValue || ReadErrorsUncorrected.HasValue || WriteErrorsUncorrected.HasValue
+                    ? $"Provider read {(ReadErrorsTotal ?? 0):N0} · write {(WriteErrorsTotal ?? 0):N0} · uncorrected {(ReadErrorsUncorrected ?? 0) + (WriteErrorsUncorrected ?? 0):N0}"
+                    : "Protocol-native counters not exposed";
+        public string ReliabilityErrorDetails => HasNvmeReliability
+            ? $"NVMe lifetime log; error-log entries can be non-fatal · {UnsafeShutdownsText}"
+            : HasAtaReliability
+                ? $"Reallocation events {(ReallocationEvents ?? 0):N0} · interface CRC {(CrcErrors ?? 0):N0} · {UnsafeShutdownsText}"
+                : "The drive/controller did not provide NVMe or ATA SMART error data.";
+        public string ReliabilityColor => (NvmeMediaErrors ?? 0) > 0 || (ReallocatedSectors ?? 0) > 0 ||
+                                          (PendingSectors ?? 0) > 0 || AtaUncorrectable > 0
+            ? "#FF6B7A"
+            : (NvmeErrorLogEntries ?? 0) > 0 || (ReallocationEvents ?? 0) > 0 || (CrcErrors ?? 0) > 0
+                ? "#FFB454"
+                : HasNvmeReliability || HasAtaReliability ? "#58D6C7" : "#959DAF";
+        public string ErrorSummary => ReliabilityErrorHeadline;
+        public string UnsafeShutdownsText => UnsafeShutdowns.HasValue ? $"{UnsafeShutdowns:N0} unsafe shutdown(s)" : "Unsafe shutdowns not reported";
+        public string HealthColor => Health switch { "Unhealthy" => "#FF6B7A", "Warning" => "#FFB454", "Healthy" => "#58D6C7", _ => "#959DAF" };
+        public string CapacityText => FormatSize(SizeBytes);
+        public string InterfaceText => $"{MediaType} · {BusType}";
+        public string TemperatureText => FormatTemperature(Temperature);
+        public string ActivityText => FormatPercent(Load);
+        public string ReadRateText => FormatRate(ReadBytesPerSecond);
+        public string WriteRateText => FormatRate(WriteBytesPerSecond);
+        public string ReliabilitySummary => Health == "Healthy"
+            ? "Windows reports this drive is healthy."
+            : Health == "Warning"
+                ? "Windows reports a reliability warning. Back up important data and review the error counters."
+                : Health == "Unhealthy"
+                    ? "Windows reports this drive is unhealthy. Back up important data immediately."
+                    : "The storage provider did not expose a definitive health state.";
     }
 
     public sealed class FrameApplicationItem
@@ -639,6 +915,92 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         public int ProcessId { get; }
         public string DisplayName { get; }
         public float? FrameTimeMilliseconds { get; }
+    }
+
+    public sealed class ProcessTelemetryItem
+    {
+        public ProcessTelemetryItem(ProcessTelemetrySnapshot process)
+        {
+            ProcessId = process.ProcessId;
+            DisplayName = process.Name;
+            Cpu = $"{process.CpuPercent:0.0}%";
+            Memory = FormatBytes(process.WorkingSetBytes);
+            DiskRead = FormatRate(process.ReadBytesPerSecond);
+            DiskWrite = FormatRate(process.WriteBytesPerSecond);
+        }
+
+        public int ProcessId { get; }
+        public string DisplayName { get; }
+        public string Cpu { get; }
+        public string Memory { get; }
+        public string DiskRead { get; }
+        public string DiskWrite { get; }
+    }
+
+    public sealed class NetworkAdapterItem
+    {
+        public NetworkAdapterItem(NetworkAdapterSnapshot adapter)
+        {
+            DisplayName = adapter.Name;
+            Description = adapter.Description;
+            Status = adapter.Status;
+            StatusColor = adapter.Status == "Up" ? "#58D6C7" : "#959DAF";
+            Addresses = adapter.Addresses;
+            LinkSpeed = adapter.LinkSpeedBitsPerSecond > 0 ? $"{adapter.LinkSpeedBitsPerSecond / 1_000_000d:0.#} Mbps" : "Unknown";
+            Download = FormatRate(adapter.ReceivedBytesPerSecond);
+            Upload = FormatRate(adapter.SentBytesPerSecond);
+            TotalReceived = FormatBytes(adapter.TotalReceivedBytes);
+            TotalSent = FormatBytes(adapter.TotalSentBytes);
+        }
+
+        public string DisplayName { get; }
+        public string Description { get; }
+        public string Status { get; }
+        public string StatusColor { get; }
+        public string Addresses { get; }
+        public string LinkSpeed { get; }
+        public string Download { get; }
+        public string Upload { get; }
+        public string TotalReceived { get; }
+        public string TotalSent { get; }
+    }
+
+    public sealed class HistoryItem
+    {
+        public HistoryItem(HistorySample sample)
+        {
+            Timestamp = sample.Timestamp.ToString("MMM d, HH:mm:ss");
+            Cpu = $"{FormatTemperature(sample.CpuTemperature)} · {FormatPercent(sample.CpuLoad)}";
+            Gpu = $"{FormatTemperature(sample.GpuTemperature)} · {FormatPercent(sample.GpuLoad)}";
+            Memory = FormatPercent(sample.MemoryLoad);
+            Storage = $"{FormatTemperature(sample.StorageTemperature)} · {FormatPercent(sample.StorageLoad)}";
+        }
+        public string Timestamp { get; }
+        public string Cpu { get; }
+        public string Gpu { get; }
+        public string Memory { get; }
+        public string Storage { get; }
+    }
+
+    public sealed class AlertItem
+    {
+        public AlertItem(MonitorAlert alert)
+        {
+            Time = alert.Timestamp.ToString("HH:mm:ss");
+            Title = alert.Title;
+            Message = alert.Message;
+        }
+        public string Time { get; }
+        public string Title { get; }
+        public string Message { get; }
+    }
+
+    private static string FormatBytes(ulong bytes)
+    {
+        if (bytes >= 1024UL * 1024 * 1024) return $"{bytes / Math.Pow(1024, 3):0.0} GB";
+        if (bytes >= 1024UL * 1024) return $"{bytes / Math.Pow(1024, 2):0.0} MB";
+        if (bytes >= 1024) return $"{bytes / 1024d:0.0} KB";
+        return $"{bytes} B";
     }
 
     private sealed class RelayCommand(Action<object?> execute, Predicate<object?>? canExecute = null) : ICommand

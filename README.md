@@ -2,7 +2,7 @@
 
 SystemPulse is a Windows 11 WPF hardware dashboard targeting .NET 10. It uses a Metro-inspired interface and reads privileged CPU temperature, voltage, and package-energy registers through PawnIO with its own C# sensor code.
 
-Current release: **v.05**
+Current release: **v.06**
 
 ## What is included
 
@@ -28,6 +28,13 @@ Current release: **v.05**
 - A live system-health card that reports heavy CPU/GPU/drive activity and hot CPU/GPU temperatures
 - A themed, in-app changelog with plain-language release notes
 - A beta Storage Cleanup page with per-drive scanning, separate temporary-file cleanup, and explicit review for every older non-temporary file
+- Configurable CPU, GPU, storage-health, and storage-temperature alerts with notification-area warnings and cooldown protection
+- Persistent 10-second telemetry history with configurable retention, recent-sample review, and CSV export
+- A live Processes page showing CPU, working memory, and per-process disk throughput
+- A live Network page showing every adapter, address, link speed, throughput, and byte totals
+- Expanded physical-drive health with drive-reported SSD wear, power-on hours, maximum temperature, native NVMe reliability indicators, and ATA SMART sector-health counters
+- A dedicated Storage page beneath Network with one clean health card per drive, including serial, firmware, operational state, capacity, interface, and live throughput
+- Saved refresh, alert, history, and notification-area preferences
 
 No HWiNFO, LibreHardwareMonitor, or other monitoring program needs to run beside SystemPulse.
 
@@ -68,7 +75,7 @@ dotnet publish .\SystemPulse.csproj -c Release -r win-x64 --self-contained true 
 - **NVIDIA GPU:** queries temperature, utilization, and whole-board power from the telemetry utility installed with the NVIDIA display driver. A direct read-only NVAPI query supplies voltage only when the installed driver and GPU expose that domain; otherwise voltage is shown as `Unavailable`.
 - **AMD GPU:** queries Radeon temperature and utilization through AMD Overdrive N with Overdrive 6 fallbacks. Supported cards also expose core voltage and ASIC power. The installed Radeon driver supplies AMD's ADL runtime; SystemPulse does not launch or require Radeon Software as a separate monitoring application.
 - **Frame time:** SystemPulse launches its bundled PresentMon capture engine invisibly and reports ETW-derived frame intervals for the active presenting application. It shows unavailable when no 3D application is presenting frames instead of estimating FPS from GPU utilization.
-- **Storage:** enumerates Windows physical disks, follows each disk's Windows reliability-counter association, and falls back to SATA SMART temperature attributes 194/190. Some USB bridges still hide SMART data; those devices remain selectable and show `Unavailable` honestly.
+- **Storage:** enumerates Windows physical disks, reads the standard NVMe SMART/Health log directly through `IOCTL_STORAGE_QUERY_PROPERTY`, follows the Windows reliability-counter association, and falls back to legacy ATA SMART attributes for temperature, power-on hours, supported SSD wear indicators, reallocated/pending sectors, uncorrectable errors, and interface CRC errors. HDDs do not receive a misleading SSD-style remaining-life percentage. Some USB/RAID bridges still block pass-through data; those devices remain selectable and show `Not reported` honestly.
 - **Motherboard:** reads Windows ACPI thermal zones supplied by motherboard firmware. Many desktop boards do not publish a board-level ACPI temperature, so this can legitimately be unavailable.
 - **Fans:** fan RPM is shown as unavailable until a board-specific Super I/O backend is added.
 

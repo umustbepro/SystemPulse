@@ -48,7 +48,20 @@
 
                 <Border Style="{StaticResource ChangeCard}" BorderBrush="#5058D6C7">
                     <StackPanel>
-                        <Grid><TextBlock Text="v.05" FontSize="18" FontWeight="SemiBold" /><Border HorizontalAlignment="Right" Background="#1858D6C7" CornerRadius="10" Padding="9,3"><TextBlock Text="CURRENT" Foreground="{DynamicResource Accent}" FontSize="10" FontWeight="Bold" /></Border></Grid>
+                        <Grid><TextBlock Text="v.06" FontSize="18" FontWeight="SemiBold" /><Border HorizontalAlignment="Right" Background="#1858D6C7" CornerRadius="10" Padding="9,3"><TextBlock Text="CURRENT" Foreground="{DynamicResource Accent}" FontSize="10" FontWeight="Bold" /></Border></Grid>
+                        <TextBlock Text="&#x2022; Added threshold alerts, notification-area support, cooldown protection, and saved monitoring preferences." Style="{StaticResource ChangeLine}" />
+                        <TextBlock Text="&#x2022; Added persistent telemetry history with configurable retention and CSV export." Style="{StaticResource ChangeLine}" />
+                        <TextBlock Text="&#x2022; Added live Processes and Network pages using the existing SystemPulse card layout and icon system." Style="{StaticResource ChangeLine}" />
+                        <TextBlock Text="&#x2022; Expanded drive health with wear, remaining life, power-on hours, maximum temperature, and error counters." Style="{StaticResource ChangeLine}" />
+                        <TextBlock Text="&#x2022; Added a dedicated Storage page with detailed identity, operational state, reliability, and live activity cards for every drive." Style="{StaticResource ChangeLine}" />
+                        <TextBlock Text="&#x2022; Fixed missing drive lifetime and power-on values by adding direct NVMe SMART/Health queries and expanded ATA SMART fallbacks." Style="{StaticResource ChangeLine}" />
+                        <TextBlock Text="&#x2022; Replaced unreliable generic drive-error totals with native NVMe media/error-log indicators and ATA SMART sector-health counters." Style="{StaticResource ChangeLine}" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource ChangeCard}">
+                    <StackPanel>
+                        <TextBlock Text="v.05" FontSize="18" FontWeight="SemiBold" />
                         <TextBlock Text="• Added live CPU voltage and package-power telemetry through PawnIO." Style="{StaticResource ChangeLine}" />
                         <TextBlock Text="• Added NVIDIA GPU board-power and supported core-voltage telemetry." Style="{StaticResource ChangeLine}" />
                         <TextBlock Text="&#x2022; Added AMD Radeon temperature, load, voltage, and supported board-power telemetry through the installed display driver." Style="{StaticResource ChangeLine}" />

@@ -40,7 +40,27 @@ public sealed record StorageDeviceSnapshot(
     string BusType,
     float? Temperature,
     string Health,
-    byte? Wear);
+    byte? Wear,
+    float? TemperatureMaximum = null,
+    ulong? PowerOnHours = null,
+    ulong? ReadErrorsTotal = null,
+    ulong? ReadErrorsUncorrected = null,
+    ulong? WriteErrorsTotal = null,
+    ulong? WriteErrorsUncorrected = null,
+    string SerialNumber = "Not reported",
+    string FirmwareVersion = "Not reported",
+    string OperationalStatus = "Unknown",
+    string PhysicalLocation = "Not reported",
+    ulong? UnsafeShutdowns = null,
+    string HealthDataSource = "Windows storage provider",
+    ulong? NvmeMediaErrors = null,
+    ulong? NvmeErrorLogEntries = null,
+    ulong? ReallocatedSectors = null,
+    ulong? ReallocationEvents = null,
+    ulong? PendingSectors = null,
+    ulong? OfflineUncorrectable = null,
+    ulong? ReportedUncorrectable = null,
+    ulong? CrcErrors = null);
 
 public sealed record StoragePerformanceSnapshot(
     string DeviceId,

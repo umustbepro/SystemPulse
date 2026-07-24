@@ -96,7 +96,9 @@ internal sealed class PresentMonFrameReader : IDisposable
         if (_disposed)
             return;
 
-        var executable = Path.Combine(AppContext.BaseDirectory, "PresentMon", "PresentMon.exe");
+        var executable = BundledToolExtractor.Resolve(
+            Path.Combine("PresentMon", "PresentMon.exe"),
+            "SystemPulse.Bundled.PresentMon.exe");
         if (!File.Exists(executable))
             return;
 
@@ -109,7 +111,7 @@ internal sealed class PresentMonFrameReader : IDisposable
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-                WorkingDirectory = AppContext.BaseDirectory
+                WorkingDirectory = Path.GetDirectoryName(executable) ?? AppContext.BaseDirectory
             };
 
             _process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };

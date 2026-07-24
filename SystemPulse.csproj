@@ -3,6 +3,8 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -10,43 +12,53 @@
     <Platforms>x64</Platforms>
     <AssemblyName>SystemPulse</AssemblyName>
     <RootNamespace>SystemPulse</RootNamespace>
-    <Version>0.5.0</Version>
-    <AssemblyVersion>0.5.0.0</AssemblyVersion>
-    <FileVersion>0.5.0.0</FileVersion>
-    <InformationalVersion>v.05</InformationalVersion>
+    <Version>0.6.0</Version>
+    <AssemblyVersion>0.6.0.0</AssemblyVersion>
+    <FileVersion>0.6.0.0</FileVersion>
+    <InformationalVersion>v.06</InformationalVersion>
     <ApplicationIcon>Assets\SystemPulse.ico</ApplicationIcon>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DebugType>none</DebugType>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="System.Management" Version="10.0.10" />
     <Resource Include="Assets\SystemPulse.ico" />
+    <EmbeddedResource Include="Vendor\PresentMon\PresentMon.exe" LogicalName="SystemPulse.Bundled.PresentMon.exe" />
+    <EmbeddedResource Include="Vendor\PawnIO\Installer\PawnIO_setup.exe" LogicalName="SystemPulse.Bundled.PawnIO_setup.exe" />
+    <EmbeddedResource Include="Vendor\PawnIO\Modules\IntelMSR.bin" LogicalName="SystemPulse.Bundled.IntelMSR.bin" />
+    <EmbeddedResource Include="Vendor\PawnIO\Modules\AMDFamily17.bin" LogicalName="SystemPulse.Bundled.AMDFamily17.bin" />
+    <EmbeddedResource Include="Vendor\PawnIO\Modules\COPYING.LGPL-2.1" LogicalName="SystemPulse.Bundled.COPYING.LGPL-2.1" />
   </ItemGroup>
 
   <ItemGroup>
     <Content Include="Vendor\PawnIO\Installer\PawnIO_setup.exe">
       <Link>PawnIO\Installer\PawnIO_setup.exe</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
     </Content>
     <Content Include="Vendor\PawnIO\Modules\IntelMSR.bin">
       <Link>PawnIO\Modules\IntelMSR.bin</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
     </Content>
     <Content Include="Vendor\PawnIO\Modules\AMDFamily17.bin">
       <Link>PawnIO\Modules\AMDFamily17.bin</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
     </Content>
     <Content Include="Vendor\PawnIO\Modules\COPYING.LGPL-2.1">
       <Link>PawnIO\Modules\COPYING.LGPL-2.1</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
     </Content>
     <Content Include="Vendor\PresentMon\PresentMon.exe">
       <Link>PresentMon\PresentMon.exe</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
 </Project>
