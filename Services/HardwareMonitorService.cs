@@ -34,8 +34,14 @@ public sealed class HardwareMonitorService : IDisposable
                     cpu.PackageTemperature,
                     cpu.Source,
                     _system.ReadCpuLoad(),
+                    cpu.PackageVoltage,
+                    cpu.PackagePowerWatts,
+                    cpu.ElectricalSource,
                     gpu.Temperature,
                     gpu.Load,
+                    gpu.Voltage,
+                    gpu.PowerWatts,
+                    gpu.ElectricalSource,
                     null,
                     memory.Load,
                     null,
@@ -58,7 +64,8 @@ public sealed class HardwareMonitorService : IDisposable
             catch (Exception exception)
             {
                 return new SensorSnapshot(
-                    null, "PawnIO unavailable", null, null, null, null, null, null,
+                    null, "PawnIO unavailable", null, null, null, "CPU electrical telemetry unavailable",
+                    null, null, null, null, "GPU electrical telemetry unavailable", null, null, null,
                     _system.CpuName, "GPU", "System memory", Array.Empty<StorageDeviceSnapshot>(),
                     Array.Empty<StoragePerformanceSnapshot>(), null, "No active 3D presentation",
                     Array.Empty<FrameApplicationSnapshot>(),

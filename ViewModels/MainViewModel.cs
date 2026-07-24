@@ -31,6 +31,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _cpuTemperature = "—";
     private string _cpuTemperatureSource = "Detecting";
     private string _gpuTemperature = "—";
+    private string _cpuVoltage = "Unavailable";
+    private string _cpuPower = "Unavailable";
+    private string _cpuElectricalSource = "Detecting CPU electrical sensors";
+    private string _gpuVoltage = "Unavailable";
+    private string _gpuPower = "Unavailable";
+    private string _gpuElectricalSource = "Detecting GPU electrical sensors";
     private string _memoryTemperature = "—";
     private string _cpuLoad = "—";
     private string _gpuLoad = "—";
@@ -111,6 +117,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public string CpuTemperature { get => _cpuTemperature; private set => Set(ref _cpuTemperature, value); }
     public string CpuTemperatureSource { get => _cpuTemperatureSource; private set => Set(ref _cpuTemperatureSource, value); }
     public string GpuTemperature { get => _gpuTemperature; private set => Set(ref _gpuTemperature, value); }
+    public string CpuVoltage { get => _cpuVoltage; private set => Set(ref _cpuVoltage, value); }
+    public string CpuPower { get => _cpuPower; private set => Set(ref _cpuPower, value); }
+    public string CpuElectricalSource { get => _cpuElectricalSource; private set => Set(ref _cpuElectricalSource, value); }
+    public string GpuVoltage { get => _gpuVoltage; private set => Set(ref _gpuVoltage, value); }
+    public string GpuPower { get => _gpuPower; private set => Set(ref _gpuPower, value); }
+    public string GpuElectricalSource { get => _gpuElectricalSource; private set => Set(ref _gpuElectricalSource, value); }
     public string MemoryTemperature { get => _memoryTemperature; private set => Set(ref _memoryTemperature, value); }
     public string CpuLoad { get => _cpuLoad; private set => Set(ref _cpuLoad, value); }
     public string GpuLoad { get => _gpuLoad; private set => Set(ref _gpuLoad, value); }
@@ -215,6 +227,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         CpuTemperature = FormatTemperature(snapshot.CpuTemperature);
         CpuTemperatureSource = snapshot.CpuTemperatureSource;
         GpuTemperature = FormatTemperature(snapshot.GpuTemperature);
+        CpuVoltage = FormatVoltage(snapshot.CpuVoltage);
+        CpuPower = FormatPower(snapshot.CpuPowerWatts);
+        CpuElectricalSource = snapshot.CpuElectricalSource;
+        GpuVoltage = FormatVoltage(snapshot.GpuVoltage);
+        GpuPower = FormatPower(snapshot.GpuPowerWatts);
+        GpuElectricalSource = snapshot.GpuElectricalSource;
         MemoryTemperature = FormatTemperature(snapshot.MemoryTemperature, "Not exposed");
         CpuLoad = FormatPercent(snapshot.CpuLoad);
         GpuLoad = FormatPercent(snapshot.GpuLoad);
@@ -505,6 +523,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private static string FormatPercent(float? value) =>
         value.HasValue ? $"{Math.Clamp(value.Value, 0, 100):0}%" : "Unavailable";
+
+    private static string FormatVoltage(float? value) =>
+        value.HasValue ? $"{value.Value:0.000} V" : "Unavailable";
+
+    private static string FormatPower(float? value) =>
+        value.HasValue ? $"{value.Value:0.0} W" : "Unavailable";
 
     private static string FormatHealthTemperature(float? value) =>
         value.HasValue ? $"{value:0}°C" : "temperature unavailable";

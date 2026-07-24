@@ -35,6 +35,36 @@
             <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
         </Style>
 
+        <Style TargetType="ToolTip">
+            <Setter Property="Background" Value="{DynamicResource SurfaceRaised}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="10,7" />
+            <Setter Property="FontFamily" Value="{StaticResource AppFont}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="MaxWidth" Value="440" />
+            <Setter Property="HasDropShadow" Value="True" />
+            <Setter Property="OverridesDefaultStyle" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToolTip">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <TextBlock Text="{TemplateBinding Content}"
+                                       Foreground="{TemplateBinding Foreground}"
+                                       FontFamily="{TemplateBinding FontFamily}"
+                                       FontSize="{TemplateBinding FontSize}"
+                                       TextWrapping="Wrap" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="IconButton" TargetType="Button">
             <Setter Property="Width" Value="38" />
             <Setter Property="Height" Value="38" />

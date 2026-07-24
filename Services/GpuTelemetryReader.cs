@@ -8,18 +8,20 @@ internal sealed class GpuTelemetryReader
 {
     private readonly string? _nvidiaSmi = FindNvidiaSmi();
     private readonly string _fallbackName = ReadDisplayAdapterName();
+    private readonly NvidiaVoltageReader _voltage = new();
+    private readonly AmdGpuTelemetryReader _amd = new();
 
     public GpuTelemetry Read()
     {
         if (_nvidiaSmi is null)
-            return new GpuTelemetry(null, null, _fallbackName, "Windows display adapter");
+            return _amd.Read() ?? GpuTelemetry.Unavailable(_fallbackName, "Windows display adapter");
 
         try
         {
             using var process = Process.Start(new ProcessStartInfo
             {
                 FileName = _nvidiaSmi,
-                Arguments = "--query-gpu=name,temperature.gpu,utilization.gpu --format=csv,noheader,nounits",
+                Arguments = "--query-gpu=index,name,temperature.gpu,utilization.gpu,power.draw --format=csv,noheader,nounits",
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
@@ -27,13 +29,13 @@ internal sealed class GpuTelemetryReader
             });
 
             if (process is null)
-                return new GpuTelemetry(null, null, _fallbackName, "Windows display adapter");
+                return _amd.Read() ?? GpuTelemetry.Unavailable(_fallbackName, "Windows display adapter");
 
             var output = process.StandardOutput.ReadToEnd();
             if (!process.WaitForExit(1800))
             {
                 process.Kill(entireProcessTree: true);
-                return new GpuTelemetry(null, null, _fallbackName, "NVIDIA driver query timed out");
+                return _amd.Read() ?? GpuTelemetry.Unavailable(_fallbackName, "NVIDIA driver query timed out");
             }
 
             var readings = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
@@ -43,35 +45,53 @@ internal sealed class GpuTelemetryReader
                 .ToArray();
 
             if (readings.Length == 0)
-                return new GpuTelemetry(null, null, _fallbackName, "NVIDIA driver telemetry unavailable");
+                return _amd.Read() ?? GpuTelemetry.Unavailable(_fallbackName, "NVIDIA driver telemetry unavailable");
 
             var hottest = readings.OrderByDescending(item => item.Temperature ?? float.MinValue).First();
-            return hottest with { Source = $"NVIDIA driver telemetry · {readings.Length} GPU(s)" };
+            var voltage = _voltage.Read(hottest.PhysicalIndex);
+            return hottest with
+            {
+                Voltage = voltage.Voltage,
+                Source = $"NVIDIA driver telemetry · {readings.Length} GPU(s)",
+                ElectricalSource = hottest.PowerWatts.HasValue
+                    ? $"NVIDIA board power · {voltage.Source}"
+                    : voltage.Source
+            };
         }
         catch
         {
-            return new GpuTelemetry(null, null, _fallbackName, "Windows display adapter");
+            return _amd.Read() ?? GpuTelemetry.Unavailable(_fallbackName, "Windows display adapter");
         }
     }
 
     private static GpuTelemetry? ParseLine(string line)
     {
         var columns = line.Split(',');
-        if (columns.Length < 3)
+        if (columns.Length < 5 || !int.TryParse(columns[0].Trim(), out var physicalIndex))
             return null;
 
-        var name = string.Join(",", columns[..^2]).Trim();
-        _ = float.TryParse(columns[^2].Trim(), System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture, out var temperature);
-        _ = float.TryParse(columns[^1].Trim(), System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture, out var load);
+        var name = string.Join(",", columns[1..^3]).Trim();
+        var temperature = ParseReading(columns[^3], 1, 130);
+        var load = ParseReading(columns[^2], 0, 100);
+        var power = ParseReading(columns[^1], 0, 2000);
 
         return new GpuTelemetry(
-            temperature is > 0 and < 130 ? temperature : null,
-            load is >= 0 and <= 100 ? load : null,
+            temperature,
+            load,
+            null,
+            power,
             string.IsNullOrWhiteSpace(name) ? "NVIDIA GPU" : name,
-            "NVIDIA driver telemetry");
+            "NVIDIA driver telemetry",
+            power.HasValue ? "NVIDIA board power" : "NVIDIA electrical telemetry unavailable",
+            physicalIndex);
     }
+
+    private static float? ParseReading(string text, float minimum, float maximum) =>
+        float.TryParse(text.Trim(), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var value) &&
+        float.IsFinite(value) && value >= minimum && value <= maximum
+            ? value
+            : null;
 
     private static string? FindNvidiaSmi()
     {
@@ -116,4 +136,16 @@ internal sealed class GpuTelemetryReader
     }
 }
 
-internal sealed record GpuTelemetry(float? Temperature, float? Load, string Name, string Source);
+internal sealed record GpuTelemetry(
+    float? Temperature,
+    float? Load,
+    float? Voltage,
+    float? PowerWatts,
+    string Name,
+    string Source,
+    string ElectricalSource,
+    int PhysicalIndex)
+{
+    public static GpuTelemetry Unavailable(string name, string source) =>
+        new(null, null, null, null, name, source, "GPU electrical telemetry unavailable", -1);
+}

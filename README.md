@@ -1,8 +1,8 @@
 # SystemPulse
 
-SystemPulse is a Windows 11 WPF hardware dashboard targeting .NET 10. It uses a Metro-inspired interface and reads privileged CPU temperature registers through PawnIO with its own C# sensor code.
+SystemPulse is a Windows 11 WPF hardware dashboard targeting .NET 10. It uses a Metro-inspired interface and reads privileged CPU temperature, voltage, and package-energy registers through PawnIO with its own C# sensor code.
 
-Current release: **v.04**
+Current release: **v.05**
 
 ## What is included
 
@@ -16,8 +16,10 @@ Current release: **v.04**
 - Direct PawnIO device communication; `PawnIOLib.dll` is not required
 - Intel package and per-logical-processor temperature reads using `IA32_PACKAGE_THERM_STATUS`, `IA32_THERM_STATUS`, and per-processor `IA32_TEMPERATURE_TARGET`
 - AMD Family 17h through 1Ah package temperature reads using the SMN thermal register
+- Intel/AMD CPU voltage where the processor exposes a valid voltage/VID field, plus package power calculated from hardware energy-counter deltas
 - Processor-group affinity support for systems with more than 64 logical processors
-- NVIDIA temperature and utilization from the installed NVIDIA display driver
+- NVIDIA temperature, utilization, and board power from the installed NVIDIA display driver, plus voltage on drivers and GPUs that expose it through NVAPI
+- AMD Radeon temperature, utilization, voltage, and supported ASIC power directly from the installed AMD display driver
 - Native Windows CPU-load and physical-memory utilization metrics
 - Per-physical-disk active time plus current read/write throughput
 - Bundled Intel PresentMon 2.4.1 console capture for accurate active-application frame time and FPS; no separate installation or visible console window
@@ -61,9 +63,10 @@ dotnet publish .\SystemPulse.csproj -c Release -r win-x64 --self-contained true 
 
 ## Sensor behavior
 
-- **Intel CPU:** reads every active logical processor, then reads a package sensor for each Windows processor group. Hybrid P/E-core TjMax values are read individually.
-- **AMD CPU:** supports the official `AMDFamily17.bin` module, whose current signed release accepts Family 17h through 1Ah processors.
-- **NVIDIA GPU:** queries the telemetry utility installed with the NVIDIA display driver. AMD and Intel adapter names still appear, but this version does not claim temperature support for those GPU vendors.
+- **Intel CPU:** reads every active logical processor, then reads a package sensor for each Windows processor group. Hybrid P/E-core TjMax values are read individually. Package watts appear after two energy samples; voltage remains unavailable on models that do not expose a valid `IA32_PERF_STATUS` voltage field.
+- **AMD CPU:** supports the official `AMDFamily17.bin` module, whose current signed release accepts Family 17h through 1Ah processors. Package watts use the AMD energy counter; voltage is the current firmware-exposed P-state VID when available.
+- **NVIDIA GPU:** queries temperature, utilization, and whole-board power from the telemetry utility installed with the NVIDIA display driver. A direct read-only NVAPI query supplies voltage only when the installed driver and GPU expose that domain; otherwise voltage is shown as `Unavailable`.
+- **AMD GPU:** queries Radeon temperature and utilization through AMD Overdrive N with Overdrive 6 fallbacks. Supported cards also expose core voltage and ASIC power. The installed Radeon driver supplies AMD's ADL runtime; SystemPulse does not launch or require Radeon Software as a separate monitoring application.
 - **Frame time:** SystemPulse launches its bundled PresentMon capture engine invisibly and reports ETW-derived frame intervals for the active presenting application. It shows unavailable when no 3D application is presenting frames instead of estimating FPS from GPU utilization.
 - **Storage:** enumerates Windows physical disks, follows each disk's Windows reliability-counter association, and falls back to SATA SMART temperature attributes 194/190. Some USB bridges still hide SMART data; those devices remain selectable and show `Unavailable` honestly.
 - **Motherboard:** reads Windows ACPI thermal zones supplied by motherboard firmware. Many desktop boards do not publish a board-level ACPI temperature, so this can legitimately be unavailable.
@@ -88,6 +91,8 @@ See `THIRD-PARTY-NOTICES.md` and `Vendor/PawnIO/Modules/COPYING.LGPL-2.1` for li
 - `Services/PawnIo/PawnIoClient.cs` — direct PawnIO device-control client
 - `Services/PawnIo/CpuTemperatureReader.cs` — Intel/AMD custom register decoding and CPU affinity
 - `Services/GpuTelemetryReader.cs` — graphics-driver telemetry
+- `Services/NvidiaVoltageReader.cs` — optional direct NVIDIA driver voltage telemetry
+- `Services/AmdGpuTelemetryReader.cs` — direct AMD Radeon driver temperature, load, voltage, and power telemetry
 - `Services/StorageTelemetryReader.cs` — physical-disk discovery and reliability temperatures
 - `Services/StoragePerformanceReader.cs` — per-physical-disk load and read/write throughput
 - `Services/PresentMonFrameReader.cs` — hidden ETW frame-time capture and active-application selection

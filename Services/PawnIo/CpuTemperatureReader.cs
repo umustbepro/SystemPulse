@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics.X86;
 
@@ -7,16 +8,26 @@ namespace SystemPulse.Services.PawnIo;
 internal sealed class CpuTemperatureReader : IDisposable
 {
     private const uint IntelThermalStatus = 0x019C;
+    private const uint IntelPerformanceStatus = 0x0198;
     private const uint IntelTemperatureTarget = 0x01A2;
     private const uint IntelPackageThermalStatus = 0x01B1;
+    private const uint IntelRaplPowerUnit = 0x0606;
+    private const uint IntelPackageEnergyStatus = 0x0611;
     private const ulong ThermalValid = 1UL << 31;
     private const uint AmdThermalRegister = 0x00059800;
     private const uint AmdTemperatureOffsetFlag = 1U << 19;
+    private const uint AmdPstateStatus = 0xC0010063;
+    private const uint AmdPstate0 = 0xC0010064;
+    private const uint AmdPowerUnit = 0xC0010299;
+    private const uint AmdPackageEnergyStatus = 0xC001029B;
 
     private readonly CpuVendor _vendor;
     private readonly List<ProcessorLocation> _processors = [];
     private PawnIoClient? _client;
     private int[] _tjMax = [];
+    private uint? _lastPackageEnergy;
+    private long _lastPackageEnergyTimestamp;
+    private double _lastEnergyUnit;
     private DateTime _lastConnectAttempt = DateTime.MinValue;
     private string _lastError = "PawnIO sensor driver has not been opened yet.";
 
@@ -54,6 +65,7 @@ internal sealed class CpuTemperatureReader : IDisposable
             _lastError = exception.Message;
             _client.Dispose();
             _client = null;
+            ResetEnergyCounter();
             return CpuTemperatureSample.Unavailable(_lastError);
         }
     }
@@ -76,6 +88,7 @@ internal sealed class CpuTemperatureReader : IDisposable
             var modulePath = Path.Combine(AppContext.BaseDirectory, "PawnIO", "Modules", moduleName);
             _client = PawnIoClient.Load(modulePath);
             _lastError = string.Empty;
+            ResetEnergyCounter();
 
             if (_vendor == CpuVendor.Intel)
                 ReadIntelTemperatureTargets();
@@ -151,10 +164,15 @@ internal sealed class CpuTemperatureReader : IDisposable
             ? packageTemperatures.Max()
             : coreTemperatures.Count > 0 ? coreTemperatures.Max() : null;
 
+        var electrical = ReadIntelElectrical();
+
         return new CpuTemperatureSample(
             package,
             coreTemperatures,
+            electrical.Voltage,
+            electrical.PowerWatts,
             "PawnIO · Intel package/per-core MSR",
+            electrical.Source,
             true,
             $"PawnIO ready · {coreTemperatures.Count} logical CPU sensors read");
     }
@@ -166,12 +184,112 @@ internal sealed class CpuTemperatureReader : IDisposable
         if ((raw & AmdTemperatureOffsetFlag) != 0)
             temperature -= 49f;
 
+        var electrical = ReadAmdElectrical();
+
         return new CpuTemperatureSample(
             temperature,
             [],
+            electrical.Voltage,
+            electrical.PowerWatts,
             "PawnIO · AMD Zen SMN",
+            electrical.Source,
             true,
             "PawnIO ready · AMD package sensor read");
+    }
+
+    private CpuElectricalSample ReadIntelElectrical()
+    {
+        float? voltage = null;
+        try
+        {
+            var voltages = new List<float>(_processors.Count);
+            foreach (var processor in _processors)
+            {
+                using var affinity = ProcessorAffinity.Pin(processor);
+                var raw = _client!.ReadMsr(IntelPerformanceStatus);
+                var decoded = (float)((raw >> 32 & 0xFFFF) / 8192d);
+                if (decoded is >= 0.35f and <= 2.0f)
+                    voltages.Add(decoded);
+            }
+
+            if (voltages.Count > 0)
+                voltage = voltages.Average();
+        }
+        catch
+        {
+            // Some recent Intel models do not expose the voltage field in IA32_PERF_STATUS.
+        }
+
+        var power = TryReadPackagePower(IntelRaplPowerUnit, IntelPackageEnergyStatus);
+        return new CpuElectricalSample(voltage, power, "PawnIO · Intel core voltage and RAPL package energy");
+    }
+
+    private CpuElectricalSample ReadAmdElectrical()
+    {
+        float? voltage = null;
+        try
+        {
+            var currentPstate = (uint)(_client!.ReadMsr(AmdPstateStatus) & 0x7);
+            var definition = _client.ReadMsr(AmdPstate0 + currentPstate);
+            var voltageId = (int)((definition >> 14) & 0xFF);
+            var decoded = 1.55f - voltageId * 0.00625f;
+            if (decoded is >= 0.35f and <= 2.0f)
+                voltage = decoded;
+        }
+        catch
+        {
+            // AMD can hand voltage control to firmware without exposing a current P-state VID.
+        }
+
+        var power = TryReadPackagePower(AmdPowerUnit, AmdPackageEnergyStatus);
+        return new CpuElectricalSample(voltage, power, "PawnIO · AMD P-state voltage and package energy");
+    }
+
+    private float? TryReadPackagePower(uint unitRegister, uint energyRegister)
+    {
+        try
+        {
+            var units = _client!.ReadMsr(unitRegister);
+            var energyExponent = (int)((units >> 8) & 0x1F);
+            var energyUnit = Math.Pow(0.5, energyExponent);
+            var energy = (uint)(_client.ReadMsr(energyRegister) & uint.MaxValue);
+            var timestamp = Stopwatch.GetTimestamp();
+
+            if (!_lastPackageEnergy.HasValue ||
+                _lastEnergyUnit != energyUnit ||
+                _lastPackageEnergyTimestamp == 0)
+            {
+                _lastPackageEnergy = energy;
+                _lastPackageEnergyTimestamp = timestamp;
+                _lastEnergyUnit = energyUnit;
+                return null;
+            }
+
+            var elapsedSeconds = (timestamp - _lastPackageEnergyTimestamp) / (double)Stopwatch.Frequency;
+            var previousEnergy = _lastPackageEnergy.Value;
+            _lastPackageEnergy = energy;
+            _lastPackageEnergyTimestamp = timestamp;
+            _lastEnergyUnit = energyUnit;
+
+            if (elapsedSeconds is < 0.05 or > 30)
+                return null;
+
+            var energyDelta = unchecked(energy - previousEnergy);
+            var watts = energyDelta * energyUnit / elapsedSeconds;
+            return watts is >= 0 and <= 2000 ? (float)watts : null;
+        }
+        catch
+        {
+            ResetEnergyCounter();
+            return null;
+        }
+    }
+
+    private void ResetEnergyCounter()
+    {
+        _lastPackageEnergy = null;
+        _lastPackageEnergyTimestamp = 0;
+        _lastEnergyUnit = 0;
     }
 
     private static float? DecodeIntel(ulong raw, int tjMax)
@@ -207,6 +325,7 @@ internal sealed class CpuTemperatureReader : IDisposable
     {
         _client?.Dispose();
         _client = null;
+        ResetEnergyCounter();
     }
 
     private enum CpuVendor { Other, Intel, Amd }
@@ -275,10 +394,15 @@ internal sealed class CpuTemperatureReader : IDisposable
 internal sealed record CpuTemperatureSample(
     float? PackageTemperature,
     IReadOnlyList<float> CoreTemperatures,
+    float? PackageVoltage,
+    float? PackagePowerWatts,
     string Source,
+    string ElectricalSource,
     bool IsPawnIoReady,
     string DriverStatus)
 {
     public static CpuTemperatureSample Unavailable(string status) =>
-        new(null, [], "PawnIO unavailable", false, status);
+        new(null, [], null, null, "PawnIO unavailable", "PawnIO electrical sensors unavailable", false, status);
 }
+
+internal sealed record CpuElectricalSample(float? Voltage, float? PowerWatts, string Source);

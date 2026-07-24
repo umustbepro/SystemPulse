@@ -20,6 +20,22 @@ SystemPulse launches the unmodified console capture binary invisibly to consume 
 
 SystemPulse uses this Windows-only package to query the operating system's storage reliability counters and firmware-provided ACPI thermal zones. Visual Studio restores it from NuGet, and the included single-file publish profile bundles it into the finished EXE.
 
+## NVIDIA display-driver telemetry
+
+- Runtime components: `nvidia-smi.exe` and `nvapi64.dll`
+- Publisher: NVIDIA Corporation
+- Documentation: https://developer.nvidia.com/nvapi
+
+SystemPulse uses the copies installed by the NVIDIA display driver to read temperature, utilization, whole-board power, and supported read-only voltage domains. These NVIDIA files are not redistributed by SystemPulse.
+
+## AMD display-driver telemetry
+
+- Runtime component: `atiadlxx.dll` (AMD Display Library)
+- Publisher: Advanced Micro Devices, Inc.
+- Documentation and SDK source: https://github.com/GPUOpen-LibrariesAndSDKs/display-library
+
+SystemPulse uses the ADL copy installed by the AMD Radeon display driver to read supported temperature, utilization, voltage, and ASIC-power metrics. AMD driver files are not redistributed by SystemPulse.
+
 ## PawnIO official installer
 
 - Project: PawnIO

@@ -10,10 +10,10 @@
     <Platforms>x64</Platforms>
     <AssemblyName>SystemPulse</AssemblyName>
     <RootNamespace>SystemPulse</RootNamespace>
-    <Version>0.4.0</Version>
-    <AssemblyVersion>0.4.0.0</AssemblyVersion>
-    <FileVersion>0.4.0.0</FileVersion>
-    <InformationalVersion>v.04</InformationalVersion>
+    <Version>0.5.0</Version>
+    <AssemblyVersion>0.5.0.0</AssemblyVersion>
+    <FileVersion>0.5.0.0</FileVersion>
+    <InformationalVersion>v.05</InformationalVersion>
     <ApplicationIcon>Assets\SystemPulse.ico</ApplicationIcon>
   </PropertyGroup>
 

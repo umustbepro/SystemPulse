@@ -48,7 +48,17 @@
 
                 <Border Style="{StaticResource ChangeCard}" BorderBrush="#5058D6C7">
                     <StackPanel>
-                        <Grid><TextBlock Text="v.04" FontSize="18" FontWeight="SemiBold" /><Border HorizontalAlignment="Right" Background="#1858D6C7" CornerRadius="10" Padding="9,3"><TextBlock Text="CURRENT" Foreground="{DynamicResource Accent}" FontSize="10" FontWeight="Bold" /></Border></Grid>
+                        <Grid><TextBlock Text="v.05" FontSize="18" FontWeight="SemiBold" /><Border HorizontalAlignment="Right" Background="#1858D6C7" CornerRadius="10" Padding="9,3"><TextBlock Text="CURRENT" Foreground="{DynamicResource Accent}" FontSize="10" FontWeight="Bold" /></Border></Grid>
+                        <TextBlock Text="• Added live CPU voltage and package-power telemetry through PawnIO." Style="{StaticResource ChangeLine}" />
+                        <TextBlock Text="• Added NVIDIA GPU board-power and supported core-voltage telemetry." Style="{StaticResource ChangeLine}" />
+                        <TextBlock Text="&#x2022; Added AMD Radeon temperature, load, voltage, and supported board-power telemetry through the installed display driver." Style="{StaticResource ChangeLine}" />
+                        <TextBlock Text="• Added matching electrical metric layouts to the CPU and GPU Overview cards." Style="{StaticResource ChangeLine}" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource ChangeCard}">
+                    <StackPanel>
+                        <TextBlock Text="v.04" FontSize="18" FontWeight="SemiBold" />
                         <TextBlock Text="• Added Storage Cleanup as a beta feature that will continue to be improved." Style="{StaticResource ChangeLine}" />
                         <TextBlock Text="• Added a scan button for every detected fixed drive." Style="{StaticResource ChangeLine}" />
                         <TextBlock Text="• Temporary files can be cleaned separately, while every older non-temporary file requires a Delete or Keep decision." Style="{StaticResource ChangeLine}" />
