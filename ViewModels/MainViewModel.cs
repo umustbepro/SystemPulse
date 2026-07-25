@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Threading;
 using SystemPulse.Models;
@@ -72,7 +73,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _systemHealthBackground = "#0B58D6C7";
     private string _systemHealthBorder = "#3058D6C7";
     private string _motherboardTemperature = "Unavailable";
-    private string _motherboardSource = "Detecting ACPI thermal zones";
+    private string _motherboardSource = "Detecting LibreHardwareMonitor board sensors";
     private string _motherboardStatus = "Detecting";
     private string _motherboardStatusColor = "#959DAF";
     private bool _hasElevatedAccess;
@@ -81,6 +82,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _cpuSensorSummary = "Detecting logical processors";
     private string _historyStatus = "Waiting for the first persistent sample";
     private string _processSummary = "Collecting process activity";
+    private string _processFilter = string.Empty;
+    private string _processSortProperty = nameof(ProcessTelemetryItem.CpuValue);
+    private ListSortDirection _processSortDirection = ListSortDirection.Descending;
     private string _networkSummary = "Collecting adapter activity";
     private string _storageSummary = "Detecting physical drives";
 
@@ -101,6 +105,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         InstallPawnIoCommand = new RelayCommand(async _ => await InstallPawnIoAsync(force: true));
         ExportHistoryCommand = new RelayCommand(_ => ExportHistory());
         OpenHistoryFolderCommand = new RelayCommand(_ => OpenHistoryFolder());
+        ProcessSortCommand = new RelayCommand(SortProcesses);
+        ProcessView = CollectionViewSource.GetDefaultView(Processes);
+        ProcessView.Filter = FilterProcess;
+        ApplyProcessSort(_processSortProperty, _processSortDirection);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -120,6 +128,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<StorageDeviceItem> StorageDevices { get; } = new();
     public ObservableCollection<FrameApplicationItem> FrameApplications { get; } = new();
     public ObservableCollection<ProcessTelemetryItem> Processes { get; } = new();
+    public ICollectionView ProcessView { get; }
     public ObservableCollection<NetworkAdapterItem> NetworkAdapters { get; } = new();
     public ObservableCollection<HistoryItem> RecentHistory { get; } = new();
     public ObservableCollection<AlertItem> RecentAlerts { get; } = new();
@@ -129,6 +138,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public ICommand InstallPawnIoCommand { get; }
     public ICommand ExportHistoryCommand { get; }
     public ICommand OpenHistoryFolderCommand { get; }
+    public ICommand ProcessSortCommand { get; }
+
+    public string ProcessNameSortLabel => SortLabel("PROCESS", nameof(ProcessTelemetryItem.DisplayName));
+    public string ProcessCpuSortLabel => SortLabel("CPU", nameof(ProcessTelemetryItem.CpuValue));
+    public string ProcessMemorySortLabel => SortLabel("MEMORY", nameof(ProcessTelemetryItem.MemoryBytes));
+    public string ProcessDiskReadSortLabel => SortLabel("DISK READ", nameof(ProcessTelemetryItem.DiskReadBytesPerSecond));
+    public string ProcessDiskWriteSortLabel => SortLabel("DISK WRITE", nameof(ProcessTelemetryItem.DiskWriteBytesPerSecond));
 
     public string LastUpdated { get => _lastUpdated; private set => Set(ref _lastUpdated, value); }
     public string StatusMessage { get => _statusMessage; private set => Set(ref _statusMessage, value); }
@@ -189,6 +205,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public string SystemHealthBackground { get => _systemHealthBackground; private set => Set(ref _systemHealthBackground, value); }
     public string SystemHealthBorder { get => _systemHealthBorder; private set => Set(ref _systemHealthBorder, value); }
     public string MotherboardTemperature { get => _motherboardTemperature; private set => Set(ref _motherboardTemperature, value); }
+    public string MotherboardModel => _monitor.MotherboardName;
     public string MotherboardSource { get => _motherboardSource; private set => Set(ref _motherboardSource, value); }
     public string MotherboardStatus { get => _motherboardStatus; private set => Set(ref _motherboardStatus, value); }
     public string MotherboardStatusColor { get => _motherboardStatusColor; private set => Set(ref _motherboardStatusColor, value); }
@@ -201,6 +218,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public string RefreshLabel => $"Every {RefreshSeconds} seconds";
     public string HistoryStatus { get => _historyStatus; private set => Set(ref _historyStatus, value); }
     public string ProcessSummary { get => _processSummary; private set => Set(ref _processSummary, value); }
+    public string ProcessFilter
+    {
+        get => _processFilter;
+        set
+        {
+            if (Set(ref _processFilter, value))
+                ProcessView.Refresh();
+        }
+    }
     public string NetworkSummary { get => _networkSummary; private set => Set(ref _networkSummary, value); }
     public string StorageSummary { get => _storageSummary; private set => Set(ref _storageSummary, value); }
 
@@ -514,6 +540,50 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             : $"{snapshots.Count} active entries · highest CPU: {busiest.Name} ({busiest.CpuPercent:0.0}%)";
     }
 
+    private bool FilterProcess(object item)
+    {
+        if (item is not ProcessTelemetryItem process || string.IsNullOrWhiteSpace(ProcessFilter))
+            return true;
+        var filter = ProcessFilter.Trim();
+        return process.DisplayName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+               process.ProcessId.ToString().Contains(filter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void SortProcesses(object? parameter)
+    {
+        if (parameter is not string propertyName)
+            return;
+
+        var direction = propertyName == _processSortProperty
+            ? _processSortDirection == ListSortDirection.Descending
+                ? ListSortDirection.Ascending
+                : ListSortDirection.Descending
+            : ListSortDirection.Descending;
+
+        ApplyProcessSort(propertyName, direction);
+    }
+
+    private void ApplyProcessSort(string propertyName, ListSortDirection direction)
+    {
+        _processSortProperty = propertyName;
+        _processSortDirection = direction;
+        ProcessView.SortDescriptions.Clear();
+        ProcessView.SortDescriptions.Add(new SortDescription(propertyName, direction));
+        if (propertyName != nameof(ProcessTelemetryItem.DisplayName))
+            ProcessView.SortDescriptions.Add(new SortDescription(nameof(ProcessTelemetryItem.DisplayName), ListSortDirection.Ascending));
+
+        OnPropertyChanged(nameof(ProcessNameSortLabel));
+        OnPropertyChanged(nameof(ProcessCpuSortLabel));
+        OnPropertyChanged(nameof(ProcessMemorySortLabel));
+        OnPropertyChanged(nameof(ProcessDiskReadSortLabel));
+        OnPropertyChanged(nameof(ProcessDiskWriteSortLabel));
+    }
+
+    private string SortLabel(string label, string propertyName) =>
+        propertyName == _processSortProperty
+            ? $"{label} {(_processSortDirection == ListSortDirection.Descending ? '↓' : '↑')}"
+            : $"{label} ↕";
+
     private void UpdateNetworkAdapters(IReadOnlyList<NetworkAdapterSnapshot> snapshots)
     {
         NetworkAdapters.Clear();
@@ -804,14 +874,6 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             PhysicalLocation = device.PhysicalLocation;
             UnsafeShutdowns = device.UnsafeShutdowns;
             HealthDataSource = device.HealthDataSource;
-            NvmeMediaErrors = device.NvmeMediaErrors;
-            NvmeErrorLogEntries = device.NvmeErrorLogEntries;
-            ReallocatedSectors = device.ReallocatedSectors;
-            ReallocationEvents = device.ReallocationEvents;
-            PendingSectors = device.PendingSectors;
-            OfflineUncorrectable = device.OfflineUncorrectable;
-            ReportedUncorrectable = device.ReportedUncorrectable;
-            CrcErrors = device.CrcErrors;
             Load = performance?.Load;
             ReadBytesPerSecond = performance?.ReadBytesPerSecond;
             WriteBytesPerSecond = performance?.WriteBytesPerSecond;
@@ -837,55 +899,16 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         public string PhysicalLocation { get; }
         public ulong? UnsafeShutdowns { get; }
         public string HealthDataSource { get; }
-        public ulong? NvmeMediaErrors { get; }
-        public ulong? NvmeErrorLogEntries { get; }
-        public ulong? ReallocatedSectors { get; }
-        public ulong? ReallocationEvents { get; }
-        public ulong? PendingSectors { get; }
-        public ulong? OfflineUncorrectable { get; }
-        public ulong? ReportedUncorrectable { get; }
-        public ulong? CrcErrors { get; }
         public float? Load { get; }
         public ulong? ReadBytesPerSecond { get; }
         public ulong? WriteBytesPerSecond { get; }
-        private bool SupportsWearIndicator => MediaType is "SSD" or "Storage-class memory" || BusType == "NVMe";
-        public string RemainingLife => !SupportsWearIndicator
-            ? "Not applicable"
-            : PowerOnHours is > 50_000 && Wear == 0
-                ? "Unverified"
-                : Wear.HasValue ? $"{Math.Max(0, 100 - Wear.Value)}% reported" : "Not reported";
-        public string WearText => !SupportsWearIndicator
-            ? "HDD health uses sector errors"
-            : Wear.HasValue
-                ? PowerOnHours is > 50_000 && Wear == 0
-                    ? "Drive reports 100% · conflicts with high hours"
-                    : $"{Wear.Value}% used · usage-based"
-                : "Drive did not expose wear";
+        public string RemainingLife => Wear.HasValue ? $"{Math.Max(0, 100 - Wear.Value)}% estimated" : "Not reported";
+        public string WearText => Wear.HasValue ? $"{Wear.Value}% used" : "Not reported";
         public string PowerOnHoursText => PowerOnHours.HasValue ? $"{PowerOnHours:N0} hours" : "Not reported";
         public string MaximumTemperatureText => TemperatureMaximum.HasValue ? $"{TemperatureMaximum:0} °C" : "Not reported";
-        private bool HasNvmeReliability => NvmeMediaErrors.HasValue || NvmeErrorLogEntries.HasValue;
-        private bool HasAtaReliability => ReallocatedSectors.HasValue || ReallocationEvents.HasValue || PendingSectors.HasValue ||
-                                          OfflineUncorrectable.HasValue || ReportedUncorrectable.HasValue || CrcErrors.HasValue;
-        private ulong AtaUncorrectable => (OfflineUncorrectable ?? 0) + (ReportedUncorrectable ?? 0);
-        public string ReliabilityErrorHeadline => HasNvmeReliability
-            ? $"Media errors {(NvmeMediaErrors ?? 0):N0} · error-log entries {(NvmeErrorLogEntries ?? 0):N0}"
-            : HasAtaReliability
-                ? $"Reallocated {(ReallocatedSectors ?? 0):N0} · pending {(PendingSectors ?? 0):N0} · uncorrectable {AtaUncorrectable:N0}"
-                : ReadErrorsTotal.HasValue || WriteErrorsTotal.HasValue || ReadErrorsUncorrected.HasValue || WriteErrorsUncorrected.HasValue
-                    ? $"Provider read {(ReadErrorsTotal ?? 0):N0} · write {(WriteErrorsTotal ?? 0):N0} · uncorrected {(ReadErrorsUncorrected ?? 0) + (WriteErrorsUncorrected ?? 0):N0}"
-                    : "Protocol-native counters not exposed";
-        public string ReliabilityErrorDetails => HasNvmeReliability
-            ? $"NVMe lifetime log; error-log entries can be non-fatal · {UnsafeShutdownsText}"
-            : HasAtaReliability
-                ? $"Reallocation events {(ReallocationEvents ?? 0):N0} · interface CRC {(CrcErrors ?? 0):N0} · {UnsafeShutdownsText}"
-                : "The drive/controller did not provide NVMe or ATA SMART error data.";
-        public string ReliabilityColor => (NvmeMediaErrors ?? 0) > 0 || (ReallocatedSectors ?? 0) > 0 ||
-                                          (PendingSectors ?? 0) > 0 || AtaUncorrectable > 0
-            ? "#FF6B7A"
-            : (NvmeErrorLogEntries ?? 0) > 0 || (ReallocationEvents ?? 0) > 0 || (CrcErrors ?? 0) > 0
-                ? "#FFB454"
-                : HasNvmeReliability || HasAtaReliability ? "#58D6C7" : "#959DAF";
-        public string ErrorSummary => ReliabilityErrorHeadline;
+        public string ErrorSummary => ReadErrorsTotal.HasValue || WriteErrorsTotal.HasValue || ReadErrorsUncorrected.HasValue || WriteErrorsUncorrected.HasValue
+            ? $"Read {(ReadErrorsTotal ?? 0):N0} · write {(WriteErrorsTotal ?? 0):N0} · uncorrected {(ReadErrorsUncorrected ?? 0) + (WriteErrorsUncorrected ?? 0):N0}"
+            : "Not reported by drive";
         public string UnsafeShutdownsText => UnsafeShutdowns.HasValue ? $"{UnsafeShutdowns:N0} unsafe shutdown(s)" : "Unsafe shutdowns not reported";
         public string HealthColor => Health switch { "Unhealthy" => "#FF6B7A", "Warning" => "#FFB454", "Healthy" => "#58D6C7", _ => "#959DAF" };
         public string CapacityText => FormatSize(SizeBytes);
@@ -927,6 +950,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             Memory = FormatBytes(process.WorkingSetBytes);
             DiskRead = FormatRate(process.ReadBytesPerSecond);
             DiskWrite = FormatRate(process.WriteBytesPerSecond);
+            CpuValue = process.CpuPercent;
+            MemoryBytes = process.WorkingSetBytes;
+            DiskReadBytesPerSecond = process.ReadBytesPerSecond;
+            DiskWriteBytesPerSecond = process.WriteBytesPerSecond;
         }
 
         public int ProcessId { get; }
@@ -935,6 +962,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         public string Memory { get; }
         public string DiskRead { get; }
         public string DiskWrite { get; }
+        public double CpuValue { get; }
+        public ulong MemoryBytes { get; }
+        public ulong DiskReadBytesPerSecond { get; }
+        public ulong DiskWriteBytesPerSecond { get; }
     }
 
     public sealed class NetworkAdapterItem

@@ -3,9 +3,11 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using Color = System.Windows.Media.Color;
 using ColorConverter = System.Windows.Media.ColorConverter;
 using SolidColorBrush = System.Windows.Media.SolidColorBrush;
+using MessageBox = System.Windows.MessageBox;
 using SystemPulse.ViewModels;
 using SystemPulse.Services;
 
@@ -15,11 +17,14 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
     private readonly TrayIconService _trayIcon;
+    private readonly UpdateService _updateService = new();
+    private UpdateRelease? _availableUpdate;
     private bool _isDarkTheme = true;
 
     public MainWindow()
     {
         InitializeComponent();
+        SetUpdateIconAnimation(updateAvailable: false);
         _viewModel = new MainViewModel();
         DataContext = _viewModel;
         _trayIcon = new TrayIconService(ShowFromTray, ExitFromTray);
@@ -34,6 +39,7 @@ public partial class MainWindow : Window
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         await _viewModel.StartAsync();
+        await CheckForUpdatesAsync(showCurrentResult: false);
         if (_viewModel.StartMinimized && _viewModel.MinimizeToTray)
             Hide();
     }
@@ -41,6 +47,7 @@ public partial class MainWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         _trayIcon.Dispose();
+        _updateService.Dispose();
         _viewModel.Dispose();
     }
 
@@ -173,6 +180,101 @@ public partial class MainWindow : Window
     {
         var changelog = new ChangelogWindow { Owner = this };
         _ = changelog.ShowDialog();
+    }
+
+    private async void UpdateButton_Click(object sender, RoutedEventArgs e)
+    {
+        var release = _availableUpdate ?? await CheckForUpdatesAsync(showCurrentResult: true);
+        if (release is null)
+            return;
+
+        var notes = string.IsNullOrWhiteSpace(release.Notes)
+            ? "No release notes were provided."
+            : release.Notes.Length > 900 ? release.Notes[..900] + "…" : release.Notes;
+        var choice = MessageBox.Show(
+            this,
+            $"SystemPulse {release.Tag} is available.\n\n{notes}\n\nDownload SystemPulse.exe from GitHub and install it now?",
+            "SystemPulse update",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Information);
+        if (choice != MessageBoxResult.Yes)
+            return;
+
+        UpdateButton.IsEnabled = false;
+        UpdateButton.ToolTip = "Downloading update…";
+        try
+        {
+            var progress = new Progress<double>(value => UpdateButton.ToolTip = $"Downloading update… {value:0}%");
+            var downloaded = await _updateService.DownloadAsync(release, progress);
+            UpdateButton.ToolTip = "Installing update…";
+            UpdateService.LaunchInstaller(downloaded);
+            Close();
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, exception.Message, "SystemPulse update", MessageBoxButton.OK, MessageBoxImage.Error);
+            UpdateButton.ToolTip = "Update failed; click to try again";
+            UpdateButton.IsEnabled = true;
+        }
+    }
+
+    private async Task<UpdateRelease?> CheckForUpdatesAsync(bool showCurrentResult)
+    {
+        UpdateButton.IsEnabled = false;
+        UpdateButton.ToolTip = "Checking GitHub for updates…";
+        try
+        {
+            var result = await _updateService.CheckAsync();
+            if (!result.Success)
+            {
+                SetUpdateIconAnimation(updateAvailable: false);
+                UpdateButton.ToolTip = result.Error;
+                if (showCurrentResult)
+                    MessageBox.Show(this, result.Error, "SystemPulse update", MessageBoxButton.OK, MessageBoxImage.Information);
+                return null;
+            }
+
+            if (!result.IsUpdateAvailable || result.Release is null)
+            {
+                _availableUpdate = null;
+                UpdateBadge.Visibility = Visibility.Collapsed;
+                SetUpdateIconAnimation(updateAvailable: false);
+                UpdateButton.ToolTip = $"SystemPulse {UpdateService.CurrentVersion.ToString(3)} is up to date";
+                if (showCurrentResult)
+                    MessageBox.Show(this, "You already have the latest version.", "SystemPulse update", MessageBoxButton.OK, MessageBoxImage.Information);
+                return null;
+            }
+
+            _availableUpdate = result.Release;
+            UpdateBadge.Visibility = Visibility.Visible;
+            SetUpdateIconAnimation(updateAvailable: true);
+            UpdateButton.ToolTip = $"Update {result.Release.Tag} is available";
+            return result.Release;
+        }
+        catch (Exception exception)
+        {
+            SetUpdateIconAnimation(updateAvailable: false);
+            UpdateButton.ToolTip = $"Update check unavailable: {exception.Message}";
+            if (showCurrentResult)
+                MessageBox.Show(this, $"The update check could not be completed.\n\n{exception.Message}", "SystemPulse update", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return null;
+        }
+        finally
+        {
+            UpdateButton.IsEnabled = true;
+        }
+    }
+
+    private void SetUpdateIconAnimation(bool updateAvailable)
+    {
+        var rotation = new DoubleAnimation
+        {
+            From = 0,
+            To = 360,
+            Duration = TimeSpan.FromSeconds(updateAvailable ? 3 : 8),
+            RepeatBehavior = RepeatBehavior.Forever
+        };
+        UpdateIconRotation.BeginAnimation(RotateTransform.AngleProperty, rotation, HandoffBehavior.SnapshotAndReplace);
     }
 
     private static void SetThemeResource(string colorKey, string brushKey, string value)

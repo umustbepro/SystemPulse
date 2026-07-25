@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using SystemPulse.Models;
@@ -24,6 +25,7 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
         DeleteTemporaryFilesCommand = new AsyncRelayCommand(DeleteTemporaryFilesAsync, _ => HasTemporaryFiles && !IsScanning);
         DeleteReviewFileCommand = new AsyncRelayCommand(DeleteReviewFileAsync, _ => HasReviewCandidate && !IsScanning);
         SkipReviewFileCommand = new RelayCommand(_ => SkipReviewFile(), _ => HasReviewCandidate && !IsScanning);
+        OpenReviewFolderCommand = new RelayCommand(_ => OpenReviewFolder(), _ => HasReviewCandidate);
         RefreshDrives();
     }
 
@@ -34,6 +36,7 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
     public ICommand DeleteTemporaryFilesCommand { get; }
     public ICommand DeleteReviewFileCommand { get; }
     public ICommand SkipReviewFileCommand { get; }
+    public ICommand OpenReviewFolderCommand { get; }
 
     public bool IsScanning { get => _isScanning; private set { if (Set(ref _isScanning, value)) RefreshCommands(); } }
     public string ScanStatus { get => _scanStatus; private set => Set(ref _scanStatus, value); }
@@ -44,7 +47,13 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
     public string ReviewPath => _currentReview?.FullPath ?? "No file awaiting review";
     public string ReviewDetails => _currentReview is null
         ? "Files requiring approval will appear here."
-        : $"{FormatBytes(_currentReview.SizeBytes)} · Last activity {_currentReview.LastActivity:yyyy-MM-dd}\nIs it okay to delete this file?";
+        : $"{FormatBytes(_currentReview.SizeBytes)} · Last activity {_currentReview.LastActivity:yyyy-MM-dd}\n" +
+          (_service.WillDeleteContainingFolder(_currentReview)
+              ? "Approval deletes this EXE's containing folder and all associated files."
+              : "Approval deletes this file only.");
+    public string ReviewDeleteLabel => _currentReview is not null && _service.WillDeleteContainingFolder(_currentReview)
+        ? "Delete EXE folder"
+        : "Delete file";
 
     private void RefreshDrives()
     {
@@ -128,9 +137,9 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
         if (candidate is null)
             return;
         IsScanning = true;
-        var result = await Task.Run(() => _service.Delete(candidate));
+        var result = await Task.Run(() => _service.DeleteApprovedReview(candidate));
         AppendLog(result.Success
-            ? $"Deleted after approval: {candidate.FullPath}"
+            ? $"Deleted after approval: {result.Message}"
             : $"Could not delete {candidate.FullPath}: {result.Message}");
         IsScanning = false;
         AdvanceReview();
@@ -141,6 +150,24 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
         if (_currentReview is not null)
             AppendLog($"Kept: {_currentReview.FullPath}");
         AdvanceReview();
+    }
+
+    private void OpenReviewFolder()
+    {
+        if (_currentReview is null)
+            return;
+        try
+        {
+            var startInfo = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
+            startInfo.ArgumentList.Add("/select,");
+            startInfo.ArgumentList.Add(_currentReview.FullPath);
+            _ = Process.Start(startInfo);
+            AppendLog($"Opened source folder: {_currentReview.FullPath}");
+        }
+        catch (Exception exception)
+        {
+            AppendLog($"Could not open the source folder: {exception.Message}");
+        }
     }
 
     private void AdvanceReview()
@@ -158,6 +185,7 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(HasReviewCandidate));
         OnPropertyChanged(nameof(ReviewPath));
         OnPropertyChanged(nameof(ReviewDetails));
+        OnPropertyChanged(nameof(ReviewDeleteLabel));
         RefreshCommands();
     }
 

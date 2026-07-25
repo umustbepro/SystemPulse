@@ -109,6 +109,103 @@ internal sealed class StorageCleanupService
         }
     }
 
+    public CleanupDeleteResult DeleteApprovedReview(CleanupCandidate candidate)
+    {
+        if (candidate.IsTemporary || !WillDeleteContainingFolder(candidate))
+            return Delete(candidate);
+
+        var parent = Path.GetDirectoryName(candidate.FullPath)!;
+        try
+        {
+            if (!File.Exists(candidate.FullPath))
+                return new CleanupDeleteResult(false, "File no longer exists.");
+            if (ContainsReparsePoint(parent))
+            {
+                var fileOnly = Delete(candidate);
+                return fileOnly.Success
+                    ? new CleanupDeleteResult(true, "Deleted the EXE only; its folder contains a redirected item and was kept.")
+                    : fileOnly;
+            }
+
+            ClearReadOnlyAttributes(parent);
+            Directory.Delete(parent, recursive: true);
+            return new CleanupDeleteResult(true, $"Deleted the containing folder: {parent}", true);
+        }
+        catch (Exception exception)
+        {
+            return new CleanupDeleteResult(false, $"The containing folder could not be deleted: {exception.Message}");
+        }
+    }
+
+    public bool WillDeleteContainingFolder(CleanupCandidate candidate)
+    {
+        if (candidate.IsTemporary || !Path.GetExtension(candidate.FullPath).Equals(".exe", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var parent = Path.GetDirectoryName(candidate.FullPath);
+        if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent))
+            return false;
+        try
+        {
+            var normalizedParent = NormalizeDirectory(parent);
+            return !GetProtectedDeleteBoundaries()
+                .Select(NormalizeDirectory)
+                .Any(boundary => boundary.Equals(normalizedParent, StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static IReadOnlyList<string> GetProtectedDeleteBoundaries()
+    {
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return new[]
+        {
+            profile,
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyMusic),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
+            Path.Combine(profile, "Downloads"),
+            Path.GetPathRoot(profile) ?? string.Empty,
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData)
+        }.Where(path => !string.IsNullOrWhiteSpace(path)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static bool ContainsReparsePoint(string root)
+    {
+        var pending = new Stack<string>();
+        pending.Push(root);
+        while (pending.Count > 0)
+        {
+            var directory = pending.Pop();
+            var directoryInfo = new DirectoryInfo(directory);
+            if ((directoryInfo.Attributes & FileAttributes.ReparsePoint) != 0)
+                return true;
+            foreach (var file in directoryInfo.EnumerateFiles())
+                if ((file.Attributes & FileAttributes.ReparsePoint) != 0)
+                    return true;
+            foreach (var child in directoryInfo.EnumerateDirectories())
+                pending.Push(child.FullName);
+        }
+        return false;
+    }
+
+    private static void ClearReadOnlyAttributes(string root)
+    {
+        foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            var attributes = File.GetAttributes(file);
+            if ((attributes & FileAttributes.ReadOnly) != 0)
+                File.SetAttributes(file, attributes & ~FileAttributes.ReadOnly);
+        }
+    }
+
     private static IReadOnlyList<string> GetTemporaryRoots(string driveRoot)
     {
         var candidates = new[]

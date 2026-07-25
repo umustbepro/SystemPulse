@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Management;
 using Microsoft.Win32;
 
 namespace SystemPulse.Services;
@@ -10,6 +11,7 @@ internal sealed class SystemTelemetryReader
     private ulong? _previousUser;
 
     public string CpuName { get; } = ReadCpuName();
+    public string MotherboardName { get; } = ReadMotherboardName();
 
     public float? ReadCpuLoad()
     {
@@ -59,6 +61,70 @@ internal sealed class SystemTelemetryReader
         {
             return "CPU";
         }
+    }
+
+    private static string ReadMotherboardName()
+    {
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\BIOS");
+            var manufacturer = CleanBoardValue(key?.GetValue("BaseBoardManufacturer") as string);
+            var product = CleanBoardValue(key?.GetValue("BaseBoardProduct") as string);
+            var registryName = CombineBoardName(manufacturer, product);
+            if (registryName is not null)
+                return registryName;
+        }
+        catch
+        {
+            // Some firmware does not publish baseboard fields in the hardware registry.
+        }
+
+        try
+        {
+            using var searcher = new ManagementObjectSearcher(
+                "SELECT Manufacturer, Product FROM Win32_BaseBoard");
+            using var results = searcher.Get();
+            foreach (ManagementObject board in results)
+            {
+                using (board)
+                {
+                    var manufacturer = CleanBoardValue(Convert.ToString(board["Manufacturer"]));
+                    var product = CleanBoardValue(Convert.ToString(board["Product"]));
+                    var wmiName = CombineBoardName(manufacturer, product);
+                    if (wmiName is not null)
+                        return wmiName;
+                }
+            }
+        }
+        catch
+        {
+            // The model label is optional; sensor monitoring must continue without WMI.
+        }
+
+        return "Motherboard model unavailable";
+    }
+
+    private static string? CombineBoardName(string? manufacturer, string? product)
+    {
+        if (manufacturer is null)
+            return product;
+        if (product is null)
+            return manufacturer;
+        return product.Contains(manufacturer, StringComparison.OrdinalIgnoreCase)
+            ? product
+            : $"{manufacturer} {product}";
+    }
+
+    private static string? CleanBoardValue(string? value)
+    {
+        var cleaned = value?.Trim();
+        if (string.IsNullOrWhiteSpace(cleaned) ||
+            cleaned.Equals("Default string", StringComparison.OrdinalIgnoreCase) ||
+            cleaned.Equals("To be filled by O.E.M.", StringComparison.OrdinalIgnoreCase) ||
+            cleaned.Equals("Not Applicable", StringComparison.OrdinalIgnoreCase) ||
+            cleaned.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+            return null;
+        return cleaned;
     }
 
     [StructLayout(LayoutKind.Sequential)]

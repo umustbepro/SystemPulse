@@ -1,15 +1,15 @@
 # SystemPulse
 
-SystemPulse is a Windows 11 WPF hardware dashboard targeting .NET 10. It uses a Metro-inspired interface and reads privileged CPU temperature, voltage, and package-energy registers through PawnIO with its own C# sensor code.
+SystemPulse is a Windows 11 WPF hardware dashboard targeting .NET 10. It uses PawnIO for privileged CPU telemetry and LibreHardwareMonitor for broad motherboard, chipset, Super I/O, and embedded-controller temperature support.
 
-Current release: **v.06**
+Current release: **v0.7.0**
 
 ## What is included
 
-- Wide CPU and GPU cards plus responsive, equal-width storage and motherboard cards
+- Responsive layouts across every page, with wrapping hardware names and values that use the available window width instead of requiring hover tooltips
 - A themed storage selector covering every physical disk detected by Windows
 - Storage temperature, health, media type, bus type, and capacity where the device exposes them
-- Motherboard/firmware temperature from Windows ACPI thermal zones when available
+- Detected motherboard manufacturer/model plus temperature from LibreHardwareMonitor 0.9.6, with a firmware ACPI fallback
 - A separate Sensor details page
 - A separate Performance page with CPU/GPU load graphs, real ETW frame pacing, and per-drive activity
 - A selectable frame-application dropdown with separate FPS/frame-time history for each presenting process
@@ -18,8 +18,8 @@ Current release: **v.06**
 - AMD Family 17h through 1Ah package temperature reads using the SMN thermal register
 - Intel/AMD CPU voltage where the processor exposes a valid voltage/VID field, plus package power calculated from hardware energy-counter deltas
 - Processor-group affinity support for systems with more than 64 logical processors
-- NVIDIA temperature, utilization, and board power from the installed NVIDIA display driver, plus voltage on drivers and GPUs that expose it through NVAPI
-- AMD Radeon temperature, utilization, voltage, and supported ASIC power directly from the installed AMD display driver
+- NVIDIA temperature, utilization, and board power from the installed NVIDIA display driver, with NVAPI, `nvidia-smi`, and LibreHardwareMonitor voltage fallbacks
+- AMD Radeon temperature, utilization, voltage, and supported ASIC power from the installed AMD display driver, with a LibreHardwareMonitor voltage fallback
 - Native Windows CPU-load and physical-memory utilization metrics
 - Per-physical-disk active time plus current read/write throughput
 - Bundled Intel PresentMon 2.4.1 console capture for accurate active-application frame time and FPS; no separate installation or visible console window
@@ -30,13 +30,16 @@ Current release: **v.06**
 - A beta Storage Cleanup page with per-drive scanning, separate temporary-file cleanup, and explicit review for every older non-temporary file
 - Configurable CPU, GPU, storage-health, and storage-temperature alerts with notification-area warnings and cooldown protection
 - Persistent 10-second telemetry history with configurable retention, recent-sample review, and CSV export
-- A live Processes page showing CPU, working memory, and per-process disk throughput
+- A live Processes page showing CPU, working memory, and per-process disk throughput, with filtering and click-again ascending/descending column sorting
 - A live Network page showing every adapter, address, link speed, throughput, and byte totals
-- Expanded physical-drive health with drive-reported SSD wear, power-on hours, maximum temperature, native NVMe reliability indicators, and ATA SMART sector-health counters
+- Expanded physical-drive health with estimated remaining life, wear, power-on hours, maximum temperature, and error counters where Windows exposes them
 - A dedicated Storage page beneath Network with one clean health card per drive, including serial, firmware, operational state, capacity, interface, and live throughput
 - Saved refresh, alert, history, and notification-area preferences
 
-No HWiNFO, LibreHardwareMonitor, or other monitoring program needs to run beside SystemPulse.
+- Automatic GitHub Release checks plus an animated top-right button that downloads and installs only `SystemPulse.exe`
+- A source-folder button during large-file review; approved large EXEs delete their dedicated containing folder when it is safe to do so
+
+No separate HWiNFO, LibreHardwareMonitor application, or other monitoring program needs to run beside SystemPulse; the Libre library is built into the EXE.
 
 ## Open and run in Visual Studio 2026
 
@@ -49,7 +52,25 @@ No HWiNFO, LibreHardwareMonitor, or other monitoring program needs to run beside
 
 The .NET 10 SDK and the Visual Studio **.NET desktop development** workload are sufficient. Visual Studio restores the official Microsoft `System.Management` package automatically.
 
-## Publish one self-contained EXE
+## Build one optimized EXE with PowerShell
+
+The included script restores dependencies, embeds the updater repository metadata, and publishes a compressed single-file build:
+
+```powershell
+.\Build-SystemPulse.ps1 -GitHubRepository 'umustbepro/SystemPulse'
+```
+
+If Windows PowerShell blocks local scripts, run it once with:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-SystemPulse.ps1 -GitHubRepository 'umustbepro/SystemPulse'
+```
+
+The finished file is `publish/SystemPulse.exe`. The default is self-contained so users do not need .NET installed. If every target computer already has the .NET 10 Desktop Runtime, `-FrameworkDependent` creates a considerably smaller EXE.
+
+Create releases at `https://github.com/umustbepro/SystemPulse/releases` with semantic version tags such as `v0.8.0` and attach a Windows asset named `SystemPulse.exe`. The application checks that repository's latest release at startup, shows a badge when a newer version is available, and installs it only after the user confirms. GitHub's SHA-256 asset digest is verified when the API supplies one.
+
+## Publish one self-contained EXE in Visual Studio
 
 The included `Win-x64-SingleFile` publish profile places the .NET 10 Windows Desktop runtime, PawnIO installer, and signed sensor modules inside one `SystemPulse.exe`.
 
@@ -72,11 +93,11 @@ dotnet publish .\SystemPulse.csproj -c Release -r win-x64 --self-contained true 
 
 - **Intel CPU:** reads every active logical processor, then reads a package sensor for each Windows processor group. Hybrid P/E-core TjMax values are read individually. Package watts appear after two energy samples; voltage remains unavailable on models that do not expose a valid `IA32_PERF_STATUS` voltage field.
 - **AMD CPU:** supports the official `AMDFamily17.bin` module, whose current signed release accepts Family 17h through 1Ah processors. Package watts use the AMD energy counter; voltage is the current firmware-exposed P-state VID when available.
-- **NVIDIA GPU:** queries temperature, utilization, and whole-board power from the telemetry utility installed with the NVIDIA display driver. A direct read-only NVAPI query supplies voltage only when the installed driver and GPU expose that domain; otherwise voltage is shown as `Unavailable`.
-- **AMD GPU:** queries Radeon temperature and utilization through AMD Overdrive N with Overdrive 6 fallbacks. Supported cards also expose core voltage and ASIC power. The installed Radeon driver supplies AMD's ADL runtime; SystemPulse does not launch or require Radeon Software as a separate monitoring application.
+- **NVIDIA GPU:** queries temperature, utilization, and whole-board power from the telemetry utility installed with the NVIDIA display driver. Voltage uses a direct read-only NVAPI query first, the driver's `nvidia-smi -q -d VOLTAGE` report second, and a matching LibreHardwareMonitor GPU-core sensor last. Unsupported drivers and GPUs still show `Unavailable` rather than an estimated value.
+- **AMD GPU:** queries Radeon temperature and utilization through AMD Overdrive N with Overdrive 6 fallbacks. Supported cards also expose core voltage and ASIC power. If ADL omits core voltage, SystemPulse tries a matching LibreHardwareMonitor GPU-core sensor. The installed Radeon driver supplies AMD's ADL runtime; SystemPulse does not launch or require Radeon Software as a separate monitoring application.
 - **Frame time:** SystemPulse launches its bundled PresentMon capture engine invisibly and reports ETW-derived frame intervals for the active presenting application. It shows unavailable when no 3D application is presenting frames instead of estimating FPS from GPU utilization.
-- **Storage:** enumerates Windows physical disks, reads the standard NVMe SMART/Health log directly through `IOCTL_STORAGE_QUERY_PROPERTY`, follows the Windows reliability-counter association, and falls back to legacy ATA SMART attributes for temperature, power-on hours, supported SSD wear indicators, reallocated/pending sectors, uncorrectable errors, and interface CRC errors. HDDs do not receive a misleading SSD-style remaining-life percentage. Some USB/RAID bridges still block pass-through data; those devices remain selectable and show `Not reported` honestly.
-- **Motherboard:** reads Windows ACPI thermal zones supplied by motherboard firmware. Many desktop boards do not publish a board-level ACPI temperature, so this can legitimately be unavailable.
+- **Storage:** enumerates Windows physical disks, reads the standard NVMe SMART/Health log directly through `IOCTL_STORAGE_QUERY_PROPERTY`, follows the Windows reliability-counter association, and falls back to legacy ATA SMART attributes for temperature, power-on hours, and supported SSD wear indicators. Some USB/RAID bridges still block pass-through data; those devices remain selectable and show `Not reported` honestly.
+- **Motherboard:** enables LibreHardwareMonitor's motherboard and controller backends, walks motherboard child devices, and prioritizes board/system/chipset/PCH sensors while filtering CPU, GPU, memory, and storage readings. Its GPU backend is also enabled only as the final NVIDIA/AMD voltage fallback. ACPI remains a board-temperature fallback. Hardware support still depends on what a particular board, GPU driver, and embedded controller expose.
 - **Fans:** fan RPM is shown as unavailable until a board-specific Super I/O backend is added.
 
 ## PawnIO files
@@ -103,8 +124,9 @@ See `THIRD-PARTY-NOTICES.md` and `Vendor/PawnIO/Modules/COPYING.LGPL-2.1` for li
 - `Services/StorageTelemetryReader.cs` — physical-disk discovery and reliability temperatures
 - `Services/StoragePerformanceReader.cs` — per-physical-disk load and read/write throughput
 - `Services/PresentMonFrameReader.cs` — hidden ETW frame-time capture and active-application selection
-- `Services/StorageCleanupService.cs` — conservative per-drive temp/stale-file scanning and single-file deletion
-- `Services/MotherboardTemperatureReader.cs` — firmware/ACPI thermal-zone reading
+- `Services/StorageCleanupService.cs` — conservative per-drive scanning plus explicitly approved file or dedicated EXE-folder deletion
+- `Services/MotherboardTemperatureReader.cs` — LibreHardwareMonitor motherboard/controller reading, GPU-voltage fallback, and ACPI fallback
+- `Services/UpdateService.cs` — GitHub Release check, EXE validation, replacement, restart, and temporary-file cleanup
 - `Services/SystemTelemetryReader.cs` — native Windows load and memory readings
 - `Services/HardwareMonitorService.cs` — combines readings into UI snapshots
 - `ViewModels/MainViewModel.cs` — refresh loop, status, commands, and chart histories
@@ -115,4 +137,4 @@ See `THIRD-PARTY-NOTICES.md` and `Vendor/PawnIO/Modules/COPYING.LGPL-2.1` for li
 
 PawnIO provides privileged hardware access through signed, restricted modules. Use the official driver edition and official signed modules included here. Low-level monitoring software is provided without warranty; test on the intended hardware before redistribution.
 
-Storage Cleanup never deletes during scanning and never deletes directories recursively. Temporary files require a separate cleanup action. Large non-temporary files are only suggestions based on last-access/last-modified timestamps and require an individual Delete choice; Windows does not provide a reliable universal “last launched” timestamp.
+Storage Cleanup never deletes during scanning. Temporary files require a separate cleanup action. Large non-temporary files are only suggestions based on last-access/last-modified timestamps and require an individual Delete choice. When the approved candidate is an EXE inside a dedicated subfolder, that containing folder is deleted recursively so associated files are removed too. User roots such as Downloads, Desktop, Documents, Pictures, Music, Videos, the profile root, drive roots, and Windows/program directories are protected and are never selected as the recursive target. Folders containing redirected/reparse-point items are kept and only the reviewed EXE is removed. Windows does not provide a reliable universal “last launched” timestamp.

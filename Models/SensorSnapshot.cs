@@ -52,15 +52,7 @@ public sealed record StorageDeviceSnapshot(
     string OperationalStatus = "Unknown",
     string PhysicalLocation = "Not reported",
     ulong? UnsafeShutdowns = null,
-    string HealthDataSource = "Windows storage provider",
-    ulong? NvmeMediaErrors = null,
-    ulong? NvmeErrorLogEntries = null,
-    ulong? ReallocatedSectors = null,
-    ulong? ReallocationEvents = null,
-    ulong? PendingSectors = null,
-    ulong? OfflineUncorrectable = null,
-    ulong? ReportedUncorrectable = null,
-    ulong? CrcErrors = null);
+    string HealthDataSource = "Windows storage provider");
 
 public sealed record StoragePerformanceSnapshot(
     string DeviceId,

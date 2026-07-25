@@ -17,4 +17,4 @@ public sealed record CleanupScanResult(
     IReadOnlyList<CleanupCandidate> ReviewFiles,
     int SkippedLocations);
 
-public sealed record CleanupDeleteResult(bool Success, string Message);
+public sealed record CleanupDeleteResult(bool Success, string Message, bool DeletedFolder = false);

@@ -85,7 +85,7 @@ internal sealed class StorageTelemetryReader
                     : FormatHealth(ReadUshort(item, "HealthStatus"));
                 var healthSource = nvme is not null
                     ? "Direct NVMe SMART / Health log"
-                    : ataSmart is not null
+                    : ataSmart is not null && (ataSmart.PowerOnHours.HasValue || ataSmart.Wear.HasValue)
                         ? "Legacy ATA SMART attributes"
                         : "Windows storage reliability provider";
                 var name = ReadString(item, "FriendlyName");
@@ -109,15 +109,7 @@ internal sealed class StorageTelemetryReader
                     FormatOperationalStatus(item["OperationalStatus"]),
                     ValueOrUnavailable(ReadString(item, "PhysicalLocation")),
                     nvme?.UnsafeShutdowns,
-                    healthSource,
-                    nvme?.MediaErrors,
-                    nvme?.ErrorLogEntries,
-                    ataSmart?.ReallocatedSectors,
-                    ataSmart?.ReallocationEvents,
-                    ataSmart?.PendingSectors,
-                    ataSmart?.OfflineUncorrectable,
-                    ataSmart?.ReportedUncorrectable,
-                    ataSmart?.CrcErrors));
+                    healthSource));
             }
         }
 
@@ -166,15 +158,7 @@ internal sealed class StorageTelemetryReader
                         OperationalStatus: ValueOrUnavailable(ReadString(item, "Status")),
                         PhysicalLocation: ValueOrUnavailable(ReadString(item, "PNPDeviceID")),
                         UnsafeShutdowns: nvme?.UnsafeShutdowns,
-                        HealthDataSource: healthSource,
-                        NvmeMediaErrors: nvme?.MediaErrors,
-                        NvmeErrorLogEntries: nvme?.ErrorLogEntries,
-                        ReallocatedSectors: ataSmart?.ReallocatedSectors,
-                        ReallocationEvents: ataSmart?.ReallocationEvents,
-                        PendingSectors: ataSmart?.PendingSectors,
-                        OfflineUncorrectable: ataSmart?.OfflineUncorrectable,
-                        ReportedUncorrectable: ataSmart?.ReportedUncorrectable,
-                        CrcErrors: ataSmart?.CrcErrors));
+                        HealthDataSource: healthSource));
                 }
             }
 
@@ -287,12 +271,6 @@ internal sealed class StorageTelemetryReader
         float? fallbackTemperature = null;
         ulong? powerOnHours = null;
         byte? wear = null;
-        ulong? reallocatedSectors = null;
-        ulong? reallocationEvents = null;
-        ulong? pendingSectors = null;
-        ulong? offlineUncorrectable = null;
-        ulong? reportedUncorrectable = null;
-        ulong? crcErrors = null;
         for (var offset = 2; offset + 11 < data.Length; offset += 12)
         {
             var attributeId = data[offset];
@@ -311,23 +289,10 @@ internal sealed class StorageTelemetryReader
                     else fallbackTemperature = rawTemperature;
                 }
             }
-
-            switch (attributeId)
-            {
-                case 5: reallocatedSectors = rawValue; break;
-                case 187: reportedUncorrectable = rawValue; break;
-                case 196: reallocationEvents = rawValue; break;
-                case 197: pendingSectors = rawValue; break;
-                case 198: offlineUncorrectable = rawValue; break;
-                case 199: crcErrors = rawValue; break;
-            }
         }
         temperature ??= fallbackTemperature;
-        return temperature.HasValue || powerOnHours.HasValue || wear.HasValue ||
-               reallocatedSectors.HasValue || reallocationEvents.HasValue || pendingSectors.HasValue ||
-               offlineUncorrectable.HasValue || reportedUncorrectable.HasValue || crcErrors.HasValue
-            ? new SmartFallback(temperature, wear, powerOnHours, reallocatedSectors, reallocationEvents,
-                pendingSectors, offlineUncorrectable, reportedUncorrectable, crcErrors)
+        return temperature.HasValue || powerOnHours.HasValue || wear.HasValue
+            ? new SmartFallback(temperature, wear, powerOnHours)
             : null;
     }
 
@@ -419,15 +384,6 @@ internal sealed class StorageTelemetryReader
         ulong? ReadErrorsUncorrected,
         ulong? WriteErrorsTotal,
         ulong? WriteErrorsUncorrected);
-    private sealed record SmartFallback(
-        float? Temperature,
-        byte? Wear,
-        ulong? PowerOnHours,
-        ulong? ReallocatedSectors,
-        ulong? ReallocationEvents,
-        ulong? PendingSectors,
-        ulong? OfflineUncorrectable,
-        ulong? ReportedUncorrectable,
-        ulong? CrcErrors);
+    private sealed record SmartFallback(float? Temperature, byte? Wear, ulong? PowerOnHours);
     private sealed record DiskIdentity(string DeviceId, string PnpDeviceId);
 }

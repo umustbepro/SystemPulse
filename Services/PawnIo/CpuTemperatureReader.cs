@@ -85,12 +85,7 @@ internal sealed class CpuTemperatureReader : IDisposable
                 _ => throw new PawnIoException("Only Intel x64 and AMD Family 17h-1Ah CPUs are currently supported.")
             };
 
-            var modulePath = BundledToolExtractor.Resolve(
-                Path.Combine("PawnIO", "Modules", moduleName),
-                $"SystemPulse.Bundled.{moduleName}");
-            _ = BundledToolExtractor.Resolve(
-                Path.Combine("PawnIO", "Modules", "COPYING.LGPL-2.1"),
-                "SystemPulse.Bundled.COPYING.LGPL-2.1");
+            var modulePath = Path.Combine(AppContext.BaseDirectory, "PawnIO", "Modules", moduleName);
             _client = PawnIoClient.Load(modulePath);
             _lastError = string.Empty;
             ResetEnergyCounter();

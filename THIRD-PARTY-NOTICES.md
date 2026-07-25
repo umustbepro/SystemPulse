@@ -1,5 +1,13 @@
 # Third-party notices
 
+## LibreHardwareMonitorLib
+
+- Package: `LibreHardwareMonitorLib` 0.9.6
+- Project: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
+- License: Mozilla Public License 2.0 (with separately licensed components documented by that project)
+
+SystemPulse enables the library's motherboard and controller readers for board-level temperature discovery and its NVIDIA/AMD GPU readers as a final core-voltage fallback. PawnIO remains SystemPulse's CPU telemetry backend. The library and its required runtime dependencies are bundled by the single-file publish.
+
 ## Intel PresentMon
 
 - Project: PresentMon

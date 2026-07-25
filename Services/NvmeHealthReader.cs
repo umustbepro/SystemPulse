@@ -65,7 +65,6 @@ internal static class NvmeHealthReader
                 percentageUsed <= 100 ? percentageUsed : (byte)100,
                 ReadUInt128Low(buffer, healthOffset + 128),
                 ReadUInt128Low(buffer, healthOffset + 160),
-                ReadUInt128Low(buffer, healthOffset + 176),
                 ReadUInt128Low(buffer, healthOffset + 144),
                 criticalWarning);
         }
@@ -106,6 +105,5 @@ internal sealed record NvmeHealthSnapshot(
     byte PercentageUsed,
     ulong PowerOnHours,
     ulong MediaErrors,
-    ulong ErrorLogEntries,
     ulong UnsafeShutdowns,
     byte CriticalWarning);

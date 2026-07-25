@@ -35,9 +35,11 @@ internal static class PawnIoInstaller
     {
         try
         {
-            var installer = BundledToolExtractor.Resolve(
-                Path.Combine("PawnIO", "Installer", "PawnIO_setup.exe"),
-                "SystemPulse.Bundled.PawnIO_setup.exe");
+            var installer = Path.Combine(
+                AppContext.BaseDirectory,
+                "PawnIO",
+                "Installer",
+                "PawnIO_setup.exe");
 
             if (!File.Exists(installer))
                 return new PawnIoInstallResult(false, false, "The bundled PawnIO installer is missing.");

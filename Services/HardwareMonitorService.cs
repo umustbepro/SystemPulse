@@ -16,6 +16,8 @@ public sealed class HardwareMonitorService : IDisposable
     private readonly object _syncRoot = new();
     private bool _disposed;
 
+    public string MotherboardName => _system.MotherboardName;
+
     public SensorSnapshot Read()
     {
         lock (_syncRoot)
@@ -25,6 +27,26 @@ public sealed class HardwareMonitorService : IDisposable
                 var cpu = _cpuTemperature.Read();
                 var memory = _system.ReadMemory();
                 var gpu = _gpu.Read();
+                if (!gpu.Voltage.HasValue)
+                {
+                    var libreVoltage = _motherboard.ReadGpuVoltage(gpu.Name, gpu.PhysicalIndex);
+                    if (libreVoltage.Voltage.HasValue)
+                    {
+                        var powerSource = gpu.Name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase)
+                            ? "NVIDIA board power"
+                            : gpu.Name.Contains("AMD", StringComparison.OrdinalIgnoreCase) ||
+                              gpu.Name.Contains("Radeon", StringComparison.OrdinalIgnoreCase)
+                                ? "AMD ASIC power"
+                                : "GPU board power";
+                        gpu = gpu with
+                        {
+                            Voltage = libreVoltage.Voltage,
+                            ElectricalSource = gpu.PowerWatts.HasValue
+                                ? $"{powerSource} · {libreVoltage.Source}"
+                                : libreVoltage.Source
+                        };
+                    }
+                }
                 var storage = _storage.Read();
                 var storagePerformance = _storagePerformance.Read(storage);
                 var frameTime = _frameTime.Read();
@@ -69,7 +91,7 @@ public sealed class HardwareMonitorService : IDisposable
                     _system.CpuName, "GPU", "System memory", Array.Empty<StorageDeviceSnapshot>(),
                     Array.Empty<StoragePerformanceSnapshot>(), null, "No active 3D presentation",
                     Array.Empty<FrameApplicationSnapshot>(),
-                    null, "Not exposed by motherboard firmware", DateTime.Now, IsAdministrator(),
+                    null, "Not exposed by LibreHardwareMonitor or motherboard firmware", DateTime.Now, IsAdministrator(),
                     false, 0, exception.Message, exception.Message);
             }
         }
@@ -86,6 +108,7 @@ public sealed class HardwareMonitorService : IDisposable
         if (_disposed)
             return;
         _cpuTemperature.Dispose();
+        _motherboard.Dispose();
         _frameTime.Dispose();
         _disposed = true;
     }

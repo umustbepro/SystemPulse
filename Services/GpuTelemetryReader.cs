@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 
 namespace SystemPulse.Services;
 
@@ -49,6 +50,8 @@ internal sealed class GpuTelemetryReader
 
             var hottest = readings.OrderByDescending(item => item.Temperature ?? float.MinValue).First();
             var voltage = _voltage.Read(hottest.PhysicalIndex);
+            if (!voltage.Voltage.HasValue)
+                voltage = ReadNvidiaSmiVoltage(hottest.PhysicalIndex);
             return hottest with
             {
                 Voltage = voltage.Voltage,
@@ -62,6 +65,57 @@ internal sealed class GpuTelemetryReader
         {
             return _amd.Read() ?? GpuTelemetry.Unavailable(_fallbackName, "Windows display adapter");
         }
+    }
+
+    private NvidiaVoltageSample ReadNvidiaSmiVoltage(int physicalGpuIndex)
+    {
+        if (_nvidiaSmi is null || physicalGpuIndex < 0)
+            return NvidiaVoltageSample.Unavailable;
+
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = _nvidiaSmi,
+                Arguments = $"-q -i {physicalGpuIndex} -d VOLTAGE",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            });
+
+            if (process is null)
+                return NvidiaVoltageSample.Unavailable;
+
+            var output = process.StandardOutput.ReadToEnd();
+            if (!process.WaitForExit(1800))
+            {
+                process.Kill(entireProcessTree: true);
+                return NvidiaVoltageSample.Unavailable;
+            }
+
+            foreach (Match match in Regex.Matches(
+                         output,
+                         @"^\s*(?:Graphics|GPU|Core(?:\s+Voltage)?)\s*:\s*(?<mv>\d+(?:\.\d+)?)\s*mV\s*$",
+                         RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                if (!float.TryParse(match.Groups["mv"].Value,
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var millivolts))
+                    continue;
+
+                var volts = millivolts / 1000f;
+                if (float.IsFinite(volts) && volts is >= 0.05f and <= 3f)
+                    return new NvidiaVoltageSample(volts, "NVIDIA nvidia-smi · reported core voltage");
+            }
+        }
+        catch
+        {
+            // Voltage is optional and the driver varies by GPU generation.
+        }
+
+        return NvidiaVoltageSample.Unavailable;
     }
 
     private static GpuTelemetry? ParseLine(string line)
