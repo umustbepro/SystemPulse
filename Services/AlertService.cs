@@ -17,16 +17,30 @@ internal sealed class AlertService
         }
 
         var alerts = new List<MonitorAlert>();
-        EvaluateTemperature(alerts, "cpu-temp", "CPU temperature", snapshot.CpuTemperature, settings.CpuTemperatureAlert, snapshot.Timestamp);
-        EvaluateTemperature(alerts, "gpu-temp", "GPU temperature", snapshot.GpuTemperature, settings.GpuTemperatureAlert, snapshot.Timestamp);
+        if (settings.CpuAlertsEnabled)
+            EvaluateTemperature(alerts, "cpu-temp", "CPU temperature", snapshot.CpuTemperature, settings.CpuTemperatureAlert, snapshot.Timestamp);
+        else
+            DeactivatePrefix("cpu-temp");
+        if (settings.GpuAlertsEnabled)
+            EvaluateTemperature(alerts, "gpu-temp", "GPU temperature", snapshot.GpuTemperature, settings.GpuTemperatureAlert, snapshot.Timestamp);
+        else
+            DeactivatePrefix("gpu-temp");
         foreach (var drive in snapshot.StorageDevices)
         {
-            EvaluateTemperature(alerts, $"drive-temp:{drive.DeviceId}", $"{drive.DisplayName} temperature", drive.Temperature, settings.StorageTemperatureAlert, snapshot.Timestamp);
-            if (drive.Health is "Warning" or "Unhealthy")
+            if (settings.StorageTemperatureAlertsEnabled)
+                EvaluateTemperature(alerts, $"drive-temp:{drive.DeviceId}", $"{drive.DisplayName} temperature", drive.Temperature, settings.StorageTemperatureAlert, snapshot.Timestamp);
+            if (settings.StorageHealthAlertsEnabled && drive.Health is "Warning" or "Unhealthy")
                 Raise(alerts, $"drive-health:{drive.DeviceId}", "Drive health warning", $"{drive.DisplayName} reports {drive.Health.ToLowerInvariant()} health.", snapshot.Timestamp);
         }
+        if (!settings.StorageTemperatureAlertsEnabled)
+            DeactivatePrefix("drive-temp:");
+        if (!settings.StorageHealthAlertsEnabled)
+            DeactivatePrefix("drive-health:");
         return alerts;
     }
+
+    private void DeactivatePrefix(string prefix) =>
+        _active.RemoveWhere(key => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
 
     private void EvaluateTemperature(List<MonitorAlert> alerts, string key, string title, float? value, int threshold, DateTime now)
     {

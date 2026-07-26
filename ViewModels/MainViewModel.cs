@@ -236,6 +236,30 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         set { if (_settings.AlertsEnabled == value) return; _settings.AlertsEnabled = value; SaveSetting(); OnPropertyChanged(); }
     }
 
+    public bool CpuAlertsEnabled
+    {
+        get => _settings.CpuAlertsEnabled;
+        set { if (_settings.CpuAlertsEnabled == value) return; _settings.CpuAlertsEnabled = value; SaveSetting(); OnPropertyChanged(); }
+    }
+
+    public bool GpuAlertsEnabled
+    {
+        get => _settings.GpuAlertsEnabled;
+        set { if (_settings.GpuAlertsEnabled == value) return; _settings.GpuAlertsEnabled = value; SaveSetting(); OnPropertyChanged(); }
+    }
+
+    public bool StorageTemperatureAlertsEnabled
+    {
+        get => _settings.StorageTemperatureAlertsEnabled;
+        set { if (_settings.StorageTemperatureAlertsEnabled == value) return; _settings.StorageTemperatureAlertsEnabled = value; SaveSetting(); OnPropertyChanged(); }
+    }
+
+    public bool StorageHealthAlertsEnabled
+    {
+        get => _settings.StorageHealthAlertsEnabled;
+        set { if (_settings.StorageHealthAlertsEnabled == value) return; _settings.StorageHealthAlertsEnabled = value; SaveSetting(); OnPropertyChanged(); }
+    }
+
     public bool MinimizeToTray
     {
         get => _settings.MinimizeToTray;

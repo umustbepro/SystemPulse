@@ -3,6 +3,10 @@ namespace SystemPulse.Models;
 public sealed class AppSettings
 {
     public bool AlertsEnabled { get; set; } = true;
+    public bool CpuAlertsEnabled { get; set; } = true;
+    public bool GpuAlertsEnabled { get; set; } = true;
+    public bool StorageTemperatureAlertsEnabled { get; set; } = true;
+    public bool StorageHealthAlertsEnabled { get; set; } = true;
     public bool MinimizeToTray { get; set; } = true;
     public bool StartMinimized { get; set; }
     public int RefreshSeconds { get; set; } = 2;

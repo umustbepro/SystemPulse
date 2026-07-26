@@ -2,7 +2,7 @@
 
 SystemPulse is a simple Windows 11 hardware monitor. It shows temperatures, usage, power, storage health, running processes, network activity, alerts, and cleanup tools in one window.
 
-**Current version: v08.1**
+**Current version: v08.2**
 
 > [!IMPORTANT]
 > SystemPulse asks for administrator permission when it starts. This is required so the bundled PawnIO driver can read supported CPU sensors. PawnIO is installed automatically on the first launch.
