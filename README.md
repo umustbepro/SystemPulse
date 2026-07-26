@@ -151,8 +151,6 @@ SystemPulse checks [this repository's Releases page](https://github.com/umustbep
 - SystemPulse closes the matching running instance, replaces the current EXE, restarts it, and removes the temporary updater automatically.
 - A release-provided SHA-256 digest is verified when GitHub supplies one.
 
-For automatic replacement to work, the GitHub release should contain an asset named exactly `SystemPulse.exe`.
-
 ## Supported hardware
 
 SystemPulse is designed for modern Intel and AMD processors plus NVIDIA, AMD, and Intel graphics hardware. Not every sensor exists on every component.
@@ -191,14 +189,6 @@ To create a smaller framework-dependent build for computers that already have th
 ```powershell
 .\Build-SystemPulse.ps1 -GitHubRepository 'umustbepro/SystemPulse' -FrameworkDependent
 ```
-
-## Create a GitHub release
-
-1. Build the self-contained EXE.
-2. Open [GitHub Releases](https://github.com/umustbepro/SystemPulse/releases).
-3. Create a semantic version tag, such as `v0.8.1`.
-4. Upload the finished EXE as `SystemPulse.exe`.
-5. Publish the release.
 
 ## Safety and privacy
 
