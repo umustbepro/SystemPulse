@@ -2,7 +2,7 @@
 
 SystemPulse is a Windows 11 WPF hardware dashboard targeting .NET 10. It uses PawnIO for privileged CPU telemetry and LibreHardwareMonitor for broad motherboard, chipset, Super I/O, and embedded-controller temperature support.
 
-Current release: **v0.7.1**
+Current release: **v0.7.2**
 
 ## What is included
 
@@ -68,7 +68,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-SystemPulse.ps1 
 
 The finished file is `publish/SystemPulse.exe`. The default is self-contained so users do not need .NET installed. If every target computer already has the .NET 10 Desktop Runtime, `-FrameworkDependent` creates a considerably smaller EXE.
 
-Create releases at `https://github.com/umustbepro/SystemPulse/releases` with semantic version tags such as `v0.8.0` and attach a Windows asset named `SystemPulse.exe`. The application checks that repository's latest release at startup, shows a badge when a newer version is available, and installs it only after the user confirms. GitHub's SHA-256 asset digest is verified when the API supplies one.
+Create releases at `https://github.com/umustbepro/SystemPulse/releases` with semantic version tags such as `v0.8.0` and attach a Windows asset named `SystemPulse.exe`. The application checks that repository's latest release at startup and shows a badge when a newer version is available. Clicking the update button downloads the asset, closes every instance using the same installed EXE, atomically replaces that exact path even when the local file was renamed, restarts it, and removes the temporary updater without another confirmation or manual cleanup. GitHub's SHA-256 asset digest is verified when the API supplies one.
 
 ## Publish one self-contained EXE in Visual Studio
 

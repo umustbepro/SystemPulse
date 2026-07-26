@@ -203,18 +203,6 @@ public partial class MainWindow : Window
         if (release is null)
             return;
 
-        var notes = string.IsNullOrWhiteSpace(release.Notes)
-            ? "No release notes were provided."
-            : release.Notes.Length > 900 ? release.Notes[..900] + "…" : release.Notes;
-        var choice = MessageBox.Show(
-            this,
-            $"SystemPulse {release.Tag} is available.\n\n{notes}\n\nDownload SystemPulse.exe from GitHub and install it now?",
-            "SystemPulse update",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Information);
-        if (choice != MessageBoxResult.Yes)
-            return;
-
         UpdateButton.IsEnabled = false;
         UpdateButton.ToolTip = "Downloading update…";
         try

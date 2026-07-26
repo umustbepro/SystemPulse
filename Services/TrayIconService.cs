@@ -14,7 +14,7 @@ public sealed class TrayIconService : IDisposable
         menu.Items.Add("Exit", null, (_, _) => exitApplication());
         _icon = new Forms.NotifyIcon
         {
-            Text = "SystemPulse v0.7.1",
+            Text = "SystemPulse v0.7.2",
             Visible = true,
             ContextMenuStrip = menu,
             Icon = Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath ?? string.Empty)

@@ -46,7 +46,7 @@ public sealed class UpdateService : IDisposable
         var root = document.RootElement;
         var tag = root.GetProperty("tag_name").GetString() ?? string.Empty;
         if (!TryParseVersion(tag, out var remoteVersion))
-            return UpdateCheckResult.Failed($"The latest release tag '{tag}' is not a version such as v.07 or v0.7.1.");
+            return UpdateCheckResult.Failed($"The latest release tag '{tag}' is not a version such as v.07 or v0.7.2.");
 
         var asset = root.GetProperty("assets").EnumerateArray()
             .FirstOrDefault(item => string.Equals(
@@ -110,14 +110,15 @@ public sealed class UpdateService : IDisposable
     public static void LaunchInstaller(string downloadedExecutable)
     {
         var target = Environment.ProcessPath;
-        if (string.IsNullOrWhiteSpace(target) ||
-            !Path.GetFileName(target).Equals(AssetName, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Updates can only be installed from the published SystemPulse.exe.");
+        if (string.IsNullOrWhiteSpace(target) || !File.Exists(target) ||
+            !Path.GetExtension(target).Equals(".exe", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The running SystemPulse installation path is unavailable.");
+        if (!File.Exists(downloadedExecutable))
+            throw new FileNotFoundException("The downloaded SystemPulse update is unavailable.", downloadedExecutable);
 
         var startInfo = new ProcessStartInfo(downloadedExecutable)
         {
-            UseShellExecute = true,
-            Verb = "runas"
+            UseShellExecute = true
         };
         startInfo.ArgumentList.Add("--apply-update");
         startInfo.ArgumentList.Add(target);
@@ -130,33 +131,31 @@ public sealed class UpdateService : IDisposable
         try
         {
             target = Path.GetFullPath(target);
-            if (!Path.GetFileName(target).Equals(AssetName, StringComparison.OrdinalIgnoreCase) || !File.Exists(target))
+            if (!Path.GetExtension(target).Equals(".exe", StringComparison.OrdinalIgnoreCase) ||
+                !File.Exists(target) || !IsSystemPulseExecutable(target))
                 return new UpdateApplyResult(false, "The SystemPulse installation target is invalid.");
 
-            await WaitForProcessExitAsync(processId, TimeSpan.FromSeconds(30));
-            var source = Environment.ProcessPath
-                ?? throw new InvalidOperationException("The downloaded update path is unavailable.");
+            var source = Path.GetFullPath(Environment.ProcessPath
+                ?? throw new InvalidOperationException("The downloaded update path is unavailable."));
+            if (!File.Exists(source) ||
+                !Path.GetFileName(source).StartsWith("SystemPulse-update-", StringComparison.OrdinalIgnoreCase))
+                return new UpdateApplyResult(false, "The temporary SystemPulse updater is invalid.");
+
+            await EnsureProcessExitedAsync(processId, TimeSpan.FromSeconds(20));
+            await StopOtherTargetProcessesAsync(target);
+
             var staged = target + ".update";
             var backup = target + ".previous";
             TryDelete(staged);
             TryDelete(backup);
             File.Copy(source, staged, true);
-
-            try
-            {
-                File.Replace(staged, target, backup, true);
-            }
-            catch (PlatformNotSupportedException)
-            {
-                File.Move(staged, target, true);
-            }
+            await ReplaceTargetWithRetryAsync(staged, target, backup);
 
             var restart = new ProcessStartInfo(target) { UseShellExecute = true };
             restart.ArgumentList.Add("--cleanup-update");
             restart.ArgumentList.Add(source);
             restart.ArgumentList.Add(Environment.ProcessId.ToString());
             _ = Process.Start(restart) ?? throw new InvalidOperationException("The updated application could not be restarted.");
-            TryDelete(backup);
             return new UpdateApplyResult(true, "Update installed.");
         }
         catch (Exception exception)
@@ -174,6 +173,12 @@ public sealed class UpdateService : IDisposable
             if (Path.GetFileName(fullPath).StartsWith("SystemPulse-update-", StringComparison.OrdinalIgnoreCase) &&
                 Path.GetExtension(fullPath).Equals(".exe", StringComparison.OrdinalIgnoreCase))
                 TryDelete(fullPath);
+            var current = Environment.ProcessPath;
+            if (!string.IsNullOrWhiteSpace(current))
+            {
+                TryDelete(current + ".previous");
+                TryDelete(current + ".update");
+            }
         }
         catch
         {
@@ -194,6 +199,127 @@ public sealed class UpdateService : IDisposable
         catch (ArgumentException) { }
     }
 
+    private static async Task EnsureProcessExitedAsync(int processId, TimeSpan gracefulTimeout)
+    {
+        if (processId <= 0)
+            return;
+
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            using var cancellation = new CancellationTokenSource(gracefulTimeout);
+            try
+            {
+                await process.WaitForExitAsync(cancellation.Token);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+        catch (ArgumentException)
+        {
+            // The initiating instance has already exited.
+        }
+    }
+
+    private static async Task StopOtherTargetProcessesAsync(string target)
+    {
+        var normalizedTarget = Path.GetFullPath(target);
+        foreach (var candidate in Process.GetProcesses())
+        {
+            using (candidate)
+            {
+                if (candidate.Id == Environment.ProcessId)
+                    continue;
+
+                string? candidatePath;
+                try
+                {
+                    candidatePath = candidate.MainModule?.FileName;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(candidatePath) ||
+                    !Path.GetFullPath(candidatePath).Equals(normalizedTarget, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                try
+                {
+                    var closeRequested = candidate.CloseMainWindow();
+                    if (closeRequested)
+                    {
+                        using var graceful = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+                        try
+                        {
+                            await candidate.WaitForExitAsync(graceful.Token);
+                            continue;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            // A hidden or unresponsive duplicate instance must release the EXE.
+                        }
+                    }
+
+                    candidate.Kill(entireProcessTree: true);
+                    await candidate.WaitForExitAsync();
+                }
+                catch (InvalidOperationException)
+                {
+                    // It exited between discovery and shutdown.
+                }
+            }
+        }
+    }
+
+    private static async Task ReplaceTargetWithRetryAsync(string staged, string target, string backup)
+    {
+        Exception? lastError = null;
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            try
+            {
+                TryDelete(backup);
+                try
+                {
+                    File.Replace(staged, target, backup, true);
+                }
+                catch (Exception exception) when (exception is PlatformNotSupportedException or IOException)
+                {
+                    MoveSwap(staged, target, backup);
+                }
+                return;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                lastError = exception;
+                await Task.Delay(250);
+            }
+        }
+
+        throw new IOException("The existing SystemPulse EXE remained locked and could not be replaced.", lastError);
+    }
+
+    private static void MoveSwap(string staged, string target, string backup)
+    {
+        File.Move(target, backup, true);
+        try
+        {
+            File.Move(staged, target, true);
+        }
+        catch
+        {
+            if (File.Exists(backup))
+                File.Move(backup, target, true);
+            throw;
+        }
+    }
+
     private static void ValidateDownloadedExecutable(string path, long expectedLength, string? digest)
     {
         var info = new FileInfo(path);
@@ -205,6 +331,9 @@ public sealed class UpdateService : IDisposable
             if (stream.ReadByte() != 'M' || stream.ReadByte() != 'Z')
                 throw new InvalidDataException("GitHub did not return a valid Windows executable.");
         }
+
+        if (!IsSystemPulseExecutable(path))
+            throw new InvalidDataException("The GitHub asset is not a SystemPulse executable.");
 
         if (string.IsNullOrWhiteSpace(digest) || !digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
             return;
@@ -231,6 +360,20 @@ public sealed class UpdateService : IDisposable
         var parts = Repository.Split('/');
         if (parts.Length != 2 || parts.Any(string.IsNullOrWhiteSpace))
             throw new InvalidOperationException("GitHubRepository must use the owner/repository format.");
+    }
+
+    private static bool IsSystemPulseExecutable(string path)
+    {
+        try
+        {
+            var version = FileVersionInfo.GetVersionInfo(path);
+            return version.ProductName?.Equals("SystemPulse", StringComparison.OrdinalIgnoreCase) == true &&
+                   version.FileDescription?.Equals("SystemPulse", StringComparison.OrdinalIgnoreCase) == true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static void TryDelete(string path)
