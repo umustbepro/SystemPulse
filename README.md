@@ -1,142 +1,229 @@
 # SystemPulse
 
-SystemPulse is a Windows 11 WPF hardware dashboard targeting .NET 10. It uses PawnIO for privileged CPU telemetry and LibreHardwareMonitor for broad motherboard, chipset, Super I/O, and embedded-controller temperature support.
+SystemPulse is a simple Windows 11 hardware monitor. It shows temperatures, usage, power, storage health, running processes, network activity, alerts, and cleanup tools in one window.
 
-Current release: **v08.1**
+**Current version: v08.1**
 
-## What is included
+> [!IMPORTANT]
+> SystemPulse asks for administrator permission when it starts. This is required so the bundled PawnIO driver can read supported CPU sensors. PawnIO is installed automatically on the first launch.
 
-- Responsive layouts across every page, with wrapping hardware names and values that use the available window width instead of requiring hover tooltips
-- A themed storage selector covering every physical disk detected by Windows
-- Storage temperature, health, media type, bus type, and capacity where the device exposes them
-- Detected motherboard manufacturer/model plus temperature from LibreHardwareMonitor 0.9.6, with a firmware ACPI fallback
-- A separate Sensor details page
-- A separate Performance page with CPU/GPU load graphs, real ETW frame pacing, and per-drive activity
-- A selectable frame-application dropdown with separate FPS/frame-time history for each presenting process
-- Direct PawnIO device communication; `PawnIOLib.dll` is not required
-- Intel package and per-logical-processor temperature reads using `IA32_PACKAGE_THERM_STATUS`, `IA32_THERM_STATUS`, and per-processor `IA32_TEMPERATURE_TARGET`
-- AMD Family 17h through 1Ah package temperature reads using the SMN thermal register
-- Intel/AMD CPU voltage where the processor exposes a valid voltage/VID field, plus package power calculated from hardware energy-counter deltas
-- Processor-group affinity support for systems with more than 64 logical processors
-- NVIDIA temperature, utilization, and board power from the installed NVIDIA display driver, with NVAPI, `nvidia-smi`, and LibreHardwareMonitor voltage fallbacks
-- AMD Radeon temperature, utilization, voltage, and supported ASIC power from the installed AMD display driver, with a LibreHardwareMonitor voltage fallback
-- Native Windows CPU-load and physical-memory utilization metrics
-- An Overview-page Free RAM action that trims reclaimable working-set memory from noncritical applications in the current Windows session without closing them
-- A responsive Overclock (BETA) page below Performance with CPU/GPU vendor detection, direct PawnIO Intel package-power tuning without XTU, capability-probed Intel turbo-ratio controls, NVIDIA driver-backed apply/reset support, and vendor-tool handoff where a signed writable interface is unavailable
-- Per-physical-disk active time plus current read/write throughput
-- Bundled Intel PresentMon 2.4.1 console capture for accurate active-application frame time and FPS; no separate installation or visible console window
-- A bundled, official PawnIO installer that can be launched from Sensor details
-- Dark/light styling, custom vector window buttons, a matching embedded EXE/window icon, and a 1380 × 900 default window
-- A live system-health card that reports heavy CPU/GPU/drive activity and hot CPU/GPU temperatures
-- A themed, in-app changelog with plain-language release notes
-- A fixed-height Storage Cleanup workspace with hidden auto-follow logs and one Keep/Delete decision per detected parent folder
-- Configurable CPU, GPU, storage-health, and storage-temperature alerts with notification-area warnings and cooldown protection
-- Persistent 10-second telemetry history with configurable retention, recent-sample review, and CSV export
-- A live Processes page showing CPU, working memory, and per-process disk throughput, with filtering and click-again ascending/descending column sorting
-- A live Network page showing every adapter, address, link speed, throughput, and byte totals
-- Expanded physical-drive health with estimated remaining life, wear, power-on hours, maximum temperature, and error counters where Windows exposes them
-- A dedicated Storage page beneath Network with one clean health card per drive, including serial, firmware, operational state, capacity, interface, and live throughput
-- Saved refresh, alert, history, and notification-area preferences
+## Download and start
 
-- Automatic GitHub Release checks plus an animated top-right button that downloads and installs only `SystemPulse.exe`
-- A source-folder button during large-file review; approved large EXEs delete their dedicated containing folder when it is safe to do so
+1. Open the [SystemPulse Releases page](https://github.com/umustbepro/SystemPulse/releases).
+2. Open the newest release.
+3. Download `SystemPulse.exe`.
+4. Run the downloaded file and approve the Windows administrator prompt.
+5. If PawnIO requests a restart during the first launch, restart Windows once and open SystemPulse again.
 
-No separate HWiNFO, LibreHardwareMonitor application, or other monitoring program needs to run beside SystemPulse; the Libre library is built into the EXE.
+The normal release is a single self-contained EXE. Users do **not** need to install .NET separately.
 
-## Open and run in Visual Studio 2026
+## What every page does
 
-1. Open `SystemPulse.sln`.
-2. Confirm that `SystemPulse` is the startup project.
-3. Select **Debug** and **x64**.
-4. Press **F5**.
-5. Windows requests administrator approval whenever SystemPulse starts.
-6. On its first elevated launch, SystemPulse verifies and silently installs the bundled official PawnIO driver. If setup reports that a restart is required, restart Windows once.
+The screenshots below use fictional high-end components. Sensor availability still depends on the hardware and drivers installed in the computer.
 
-The .NET 10 SDK and the Visual Studio **.NET desktop development** workload are sufficient. Visual Studio restores the official Microsoft `System.Management` package automatically.
+### Overview
 
-## Build one optimized EXE with PowerShell
+![SystemPulse Overview](docs/screenshots/overview.png)
 
-The included script restores dependencies, embeds the updater repository metadata, and publishes a compressed single-file build:
+Overview is the quickest way to check the computer:
 
-```powershell
-.\Build-SystemPulse.ps1 -GitHubRepository 'umustbepro/SystemPulse'
-```
+- CPU, GPU, storage, and motherboard temperatures
+- CPU and GPU voltage, power, and current load when supported
+- Live activity graphs and simple Normal/Warning status labels
+- Storage model, type, capacity, and health
+- **Free RAM** asks Windows and noncritical applications to release reclaimable working memory. It does not close applications or delete files.
 
-If Windows PowerShell blocks local scripts, run it once with:
+### Performance
+
+![SystemPulse Performance](docs/screenshots/performance.png)
+
+Performance shows what the computer is doing right now:
+
+- CPU and GPU load history
+- GPU frame rate and frame time for the actively presenting game or application
+- Physical-drive activity, read speed, and write speed
+- CPU and GPU power information where the hardware exposes it
+
+Frame information comes from the bundled PresentMon capture engine. If no 3D application is presenting frames, FPS is shown as unavailable instead of being estimated.
+
+### Overclock (Beta)
+
+![SystemPulse Overclock](docs/screenshots/overclock.png)
+
+Overclock provides capability-checked tuning controls:
+
+- Supported NVIDIA GPU clock and power controls are applied through the installed NVIDIA driver.
+- Supported Intel package-power controls are applied directly through PawnIO.
+- CPU ratio, voltage, memory, or GPU controls remain disabled when the processor, motherboard firmware, chipset, signed PawnIO module, or display driver does not allow them.
+- **Restore defaults/baseline** returns supported settings to the values captured before tuning.
+
+> [!WARNING]
+> Overclocking can cause crashes, additional heat, data loss, or hardware damage. Increase values gradually and monitor temperatures. An unlocked Intel CPU still requires a compatible motherboard and firmware for multiplier overclocking.
+
+### Processes
+
+![SystemPulse Processes](docs/screenshots/processes.png)
+
+Processes explains which applications are using the system:
+
+- Use the search box to filter by process name.
+- Click **Process name**, **PID**, **CPU**, **Memory**, or **Disk** to sort that column.
+- Click the same column again to switch between lowest-first and highest-first.
+- Values refresh automatically while the page is open.
+
+### Network
+
+![SystemPulse Network](docs/screenshots/network.png)
+
+Network shows every detected adapter, including Ethernet and Wi-Fi:
+
+- Adapter name and connection status
+- Local address and negotiated link speed
+- Current download and upload rates
+- Total transmitted and received data
+
+Disconnected or virtual adapters may appear with zero traffic.
+
+### Storage
+
+![SystemPulse Storage](docs/screenshots/storage.png)
+
+Storage creates one health card for every physical drive:
+
+- Model, serial number, firmware, interface, and capacity
+- Temperature and operational state
+- SSD remaining life or wear information when reported
+- Power-on hours and hardware error counters when available
+- Live read, write, and active-time information
+
+Some USB and RAID adapters block direct SMART information. SystemPulse keeps those drives visible and labels unavailable values honestly.
+
+### Sensor details
+
+![SystemPulse Sensor Details](docs/screenshots/sensor-details.png)
+
+Sensor details lists individual readings and tells the user where each value came from. Depending on the computer, sources can include PawnIO, the NVIDIA or AMD display driver, LibreHardwareMonitor, NVMe SMART, Windows performance counters, and PresentMon.
+
+An unavailable reading means the hardware or driver did not expose a trustworthy value. SystemPulse does not invent missing temperatures or voltages.
+
+### Storage Cleanup (Beta)
+
+![SystemPulse Storage Cleanup](docs/screenshots/storage-cleanup.png)
+
+Storage Cleanup has two separate stages:
+
+1. A read-only scan looks for eligible temporary files and large files that have been inactive for at least six months.
+2. The user decides what should be removed.
+
+Important cleanup behavior:
+
+- Temporary files are removed only after clicking the cleanup button.
+- Non-temporary large files are never deleted automatically.
+- **Open folder** opens the file's source location.
+- Choosing **Keep** skips every detected large file in the same parent folder.
+- Choosing **Delete** applies to the reviewed parent folder, so SystemPulse does not repeatedly ask about associated files.
+- Desktop, Downloads, Documents, Pictures, Music, Videos, drive roots, Windows folders, program folders, and reparse-point folders are protected from recursive deletion.
+
+Always review the displayed path before approving deletion.
+
+### History & alerts
+
+![SystemPulse History and Alerts](docs/screenshots/history-alerts.png)
+
+History & alerts provides:
+
+- Recent temperature and activity history
+- Configurable CPU, GPU, and storage warning limits
+- Storage-health notifications
+- Notification-area alerts with cooldown protection
+- Adjustable history retention
+- CSV export for reports or troubleshooting
+
+History is saved every ten seconds according to the selected retention setting.
+
+## Automatic updates
+
+SystemPulse checks [this repository's Releases page](https://github.com/umustbepro/SystemPulse/releases) when it starts and every 120 seconds afterward.
+
+- The top-right update icon rotates slowly during normal checks.
+- A larger blue dot alternates with the icon when a newer release is available.
+- Clicking the icon downloads only the newest `SystemPulse.exe`.
+- SystemPulse closes the matching running instance, replaces the current EXE, restarts it, and removes the temporary updater automatically.
+- A release-provided SHA-256 digest is verified when GitHub supplies one.
+
+For automatic replacement to work, the GitHub release should contain an asset named exactly `SystemPulse.exe`.
+
+## Supported hardware
+
+SystemPulse is designed for modern Intel and AMD processors plus NVIDIA, AMD, and Intel graphics hardware. Not every sensor exists on every component.
+
+| Component | Main data sources |
+|---|---|
+| Intel CPU | PawnIO model-specific registers and Windows performance counters |
+| AMD CPU | PawnIO SMN/energy registers and Windows performance counters |
+| NVIDIA GPU | NVIDIA driver telemetry, NVAPI, `nvidia-smi`, and LibreHardwareMonitor fallback |
+| AMD GPU | AMD display-driver ADL/Overdrive telemetry and LibreHardwareMonitor fallback |
+| Motherboard | LibreHardwareMonitor motherboard, Super I/O, EC, chipset, and ACPI sensors |
+| Storage | Windows physical-drive data, NVMe SMART, reliability counters, and supported ATA SMART data |
+
+No separate HWiNFO or LibreHardwareMonitor application needs to remain open. The required LibreHardwareMonitor library is built into SystemPulse.
+
+## Build SystemPulse yourself
+
+Developers need the **.NET 10 SDK**. Visual Studio users should also install the **.NET desktop development** workload.
+
+Run the included PowerShell script from the source folder:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-SystemPulse.ps1 -GitHubRepository 'umustbepro/SystemPulse'
 ```
 
-The finished file is `publish/SystemPulse.exe`. The default is self-contained so users do not need .NET installed. If every target computer already has the .NET 10 Desktop Runtime, `-FrameworkDependent` creates a considerably smaller EXE.
+The finished self-contained file is:
 
-Create releases at `https://github.com/umustbepro/SystemPulse/releases` with semantic version tags such as `v0.8.0` and attach a Windows asset named `SystemPulse.exe`. The application checks that repository's latest release at startup and every 120 seconds, then alternates the update icon between its plain and blue-dot states when a newer version is available. Clicking the update button downloads the asset, closes every instance using the same installed EXE, atomically replaces that exact path even when the local file was renamed, restarts it, and removes the temporary updater without another confirmation or manual cleanup. GitHub's SHA-256 asset digest is verified when the API supplies one.
-
-## Publish one self-contained EXE in Visual Studio
-
-The included `Win-x64-SingleFile` publish profile places the .NET 10 Windows Desktop runtime, PawnIO installer, and signed sensor modules inside one `SystemPulse.exe`.
-
-1. Right-click the **SystemPulse** project in Solution Explorer and select **Publish**.
-2. Select the **Win-x64-SingleFile** profile.
-3. Select **Publish**.
-4. Find the finished executable in `bin/Release/net10.0-windows/win-x64/publish`.
-
-The profile deliberately keeps trimming disabled for WPF compatibility. On first launch, .NET extracts the bundled runtime/content beneath `%TEMP%/.net`; this is automatic and the publish folder itself contains only the distributable EXE.
-
-SystemPulse uses `requireAdministrator`, so Windows displays a UAC consent prompt every time the EXE launches. PawnIO setup only runs automatically when its machine-wide installation registry entry is absent. The installer is checked against its official SHA-256 before execution.
-
-The equivalent terminal command is:
-
-```powershell
-dotnet publish .\SystemPulse.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:IncludeAllContentForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:PublishTrimmed=false -p:DebugSymbols=false -p:DebugType=None -o .\publish
+```text
+publish\SystemPulse.exe
 ```
 
-## Sensor behavior
+The default build includes .NET 10, the official PawnIO installer, the signed PawnIO sensor modules, LibreHardwareMonitor, PresentMon, and update metadata inside one EXE.
 
-- **Intel CPU:** reads every active logical processor, then reads a package sensor for each Windows processor group. Hybrid P/E-core TjMax values are read individually. Package watts appear after two energy samples; voltage remains unavailable on models that do not expose a valid `IA32_PERF_STATUS` voltage field.
-- **AMD CPU:** supports the official `AMDFamily17.bin` module, whose current signed release accepts Family 17h through 1Ah processors. Package watts use the AMD energy counter; voltage is the current firmware-exposed P-state VID when available.
-- **NVIDIA GPU:** queries temperature, utilization, and whole-board power from the telemetry utility installed with the NVIDIA display driver. Voltage uses a direct read-only NVAPI query first, the driver's `nvidia-smi -q -d VOLTAGE` report second, and a matching LibreHardwareMonitor GPU-core sensor last. Unsupported drivers and GPUs still show `Unavailable` rather than an estimated value.
-- **AMD GPU:** queries Radeon temperature and utilization through AMD Overdrive N with Overdrive 6 fallbacks. Supported cards also expose core voltage and ASIC power. If ADL omits core voltage, SystemPulse tries a matching LibreHardwareMonitor GPU-core sensor. The installed Radeon driver supplies AMD's ADL runtime; SystemPulse does not launch or require Radeon Software as a separate monitoring application.
-- **Frame time:** SystemPulse launches its bundled PresentMon capture engine invisibly and reports ETW-derived frame intervals for the active presenting application. It shows unavailable when no 3D application is presenting frames instead of estimating FPS from GPU utilization.
-- **Storage:** enumerates Windows physical disks, reads the standard NVMe SMART/Health log directly through `IOCTL_STORAGE_QUERY_PROPERTY`, follows the Windows reliability-counter association, and falls back to legacy ATA SMART attributes for temperature, power-on hours, and supported SSD wear indicators. Some USB/RAID bridges still block pass-through data; those devices remain selectable and show `Not reported` honestly.
-- **Motherboard:** enables LibreHardwareMonitor's motherboard and controller backends, walks motherboard child devices, and prioritizes board/system/chipset/PCH sensors while filtering CPU, GPU, memory, and storage readings. Its GPU backend is also enabled only as the final NVIDIA/AMD voltage fallback. ACPI remains a board-temperature fallback. Hardware support still depends on what a particular board, GPU driver, and embedded controller expose.
-- **Fans:** fan RPM is shown as unavailable until a board-specific Super I/O backend is added.
+To create a smaller framework-dependent build for computers that already have the .NET 10 Desktop Runtime:
 
-## PawnIO files
+```powershell
+.\Build-SystemPulse.ps1 -GitHubRepository 'umustbepro/SystemPulse' -FrameworkDependent
+```
 
-The project copies these files into the application output:
+## Create a GitHub release
 
-- `Vendor/PawnIO/Installer/PawnIO_setup.exe` — official PawnIO 2.2.0 installer
-- `Vendor/PawnIO/Modules/IntelMSR.bin` — signed PawnIO.Modules 0.2.9 Intel module
-- `Vendor/PawnIO/Modules/AMDFamily17.bin` — signed PawnIO.Modules 0.2.9 AMD module
+1. Build the self-contained EXE.
+2. Open [GitHub Releases](https://github.com/umustbepro/SystemPulse/releases).
+3. Create a semantic version tag, such as `v0.8.1`.
+4. Upload the finished EXE as `SystemPulse.exe`.
+5. Publish the release.
 
-The installer SHA-256 is:
+## Safety and privacy
 
-`1F519A22E47187F70A1379A48CA604981C4FCF694F4E65B734AAA74A9FBA3032`
+- SystemPulse reads hardware and Windows performance information locally.
+- Storage Cleanup never deletes files during its scan.
+- Overclock controls require confirmation and read-back verification.
+- PawnIO access uses the bundled official driver and signed restricted modules.
+- SystemPulse should always be tested on the hardware intended for distribution.
 
-See `THIRD-PARTY-NOTICES.md` and `Vendor/PawnIO/Modules/COPYING.LGPL-2.1` for licensing and source locations.
+Third-party licenses and source locations are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-## Project structure
+## Main project files
 
-- `Services/PawnIo/PawnIoClient.cs` — direct PawnIO device-control client
-- `Services/PawnIo/CpuTemperatureReader.cs` — Intel/AMD custom register decoding and CPU affinity
-- `Services/GpuTelemetryReader.cs` — graphics-driver telemetry
-- `Services/NvidiaVoltageReader.cs` — optional direct NVIDIA driver voltage telemetry
-- `Services/AmdGpuTelemetryReader.cs` — direct AMD Radeon driver temperature, load, voltage, and power telemetry
-- `Services/StorageTelemetryReader.cs` — physical-disk discovery and reliability temperatures
-- `Services/StoragePerformanceReader.cs` — per-physical-disk load and read/write throughput
-- `Services/PresentMonFrameReader.cs` — hidden ETW frame-time capture and active-application selection
-- `Services/StorageCleanupService.cs` — conservative per-drive scanning plus explicitly approved file or dedicated EXE-folder deletion
-- `Services/MotherboardTemperatureReader.cs` — LibreHardwareMonitor motherboard/controller reading, GPU-voltage fallback, and ACPI fallback
-- `Services/UpdateService.cs` — GitHub Release check, EXE validation, replacement, restart, and temporary-file cleanup
-- `Services/SystemTelemetryReader.cs` — native Windows load and memory readings
-- `Services/HardwareMonitorService.cs` — combines readings into UI snapshots
-- `ViewModels/MainViewModel.cs` — refresh loop, status, commands, and chart histories
-- `ViewModels/StorageCleanupViewModel.cs` — cleanup scan, output log, and explicit file-review workflow
-- `MainWindow.xaml` — Metro-style shell, overview, and Sensor details page
+<details>
+<summary>Show the developer-oriented project structure</summary>
 
-## Safety note
+- `Services/PawnIo/` — PawnIO installation, CPU telemetry, and supported Intel tuning
+- `Services/GpuTelemetryReader.cs` — NVIDIA/AMD graphics telemetry
+- `Services/MotherboardTemperatureReader.cs` — motherboard and controller sensors
+- `Services/StorageTelemetryReader.cs` — physical-drive health and SMART data
+- `Services/StorageCleanupService.cs` — scanning and protected cleanup decisions
+- `Services/PresentMonFrameReader.cs` — frame-time capture
+- `Services/UpdateService.cs` — GitHub release checking and executable replacement
+- `ViewModels/MainViewModel.cs` — live dashboard state and refresh loop
+- `MainWindow.xaml` — application shell and page layouts
+- `Build-SystemPulse.ps1` — optimized single-file build script
 
-PawnIO provides privileged hardware access through signed, restricted modules. Use the official driver edition and official signed modules included here. Low-level monitoring software is provided without warranty; test on the intended hardware before redistribution.
-
-Storage Cleanup never deletes during scanning. Temporary files require a separate cleanup action. Large non-temporary files are only suggestions based on last-access/last-modified timestamps and require an individual Delete choice. When the approved candidate is an EXE inside a dedicated subfolder, that containing folder is deleted recursively so associated files are removed too. User roots such as Downloads, Desktop, Documents, Pictures, Music, Videos, the profile root, drive roots, and Windows/program directories are protected and are never selected as the recursive target. Folders containing redirected/reparse-point items are kept and only the reviewed EXE is removed. Windows does not provide a reliable universal “last launched” timestamp.
+</details>
