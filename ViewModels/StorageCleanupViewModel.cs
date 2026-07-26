@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using SystemPulse.Models;
@@ -10,8 +11,10 @@ namespace SystemPulse.ViewModels;
 
 public sealed class StorageCleanupViewModel : INotifyPropertyChanged
 {
+    private const int MaximumLogLines = 300;
     private readonly StorageCleanupService _service = new();
     private readonly Queue<CleanupCandidate> _reviewQueue = new();
+    private readonly Queue<string> _logLines = new();
     private List<CleanupCandidate> _temporaryFiles = new();
     private CleanupCandidate? _currentReview;
     private bool _isScanning;
@@ -21,6 +24,7 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
 
     public StorageCleanupViewModel()
     {
+        _logLines.Enqueue(_outputLog);
         ScanDriveCommand = new AsyncRelayCommand(ScanDriveAsync, parameter => parameter is CleanupDriveItem && !IsScanning);
         DeleteTemporaryFilesCommand = new AsyncRelayCommand(DeleteTemporaryFilesAsync, _ => HasTemporaryFiles && !IsScanning);
         DeleteReviewFileCommand = new AsyncRelayCommand(DeleteReviewFileAsync, _ => HasReviewCandidate && !IsScanning);
@@ -45,14 +49,18 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
     public bool HasTemporaryFiles => _temporaryFiles.Count > 0;
     public bool HasReviewCandidate => _currentReview is not null;
     public string ReviewPath => _currentReview?.FullPath ?? "No file awaiting review";
+    public string ReviewFolder => _currentReview is null
+        ? "No folder awaiting review"
+        : GetParentFolder(_currentReview);
     public string ReviewDetails => _currentReview is null
-        ? "Files requiring approval will appear here."
+        ? "Folders requiring approval will appear here."
         : $"{FormatBytes(_currentReview.SizeBytes)} · Last activity {_currentReview.LastActivity:yyyy-MM-dd}\n" +
           (_service.WillDeleteContainingFolder(_currentReview)
-              ? "Approval deletes this EXE's containing folder and all associated files."
-              : "Approval deletes this file only.");
+              ? "Delete removes this parent folder and all associated files. Keep skips every queued file from this folder."
+              : "This file is directly inside a protected shared folder. Delete removes only the file; Keep skips the rest of that folder.");
+    public string ReviewDisplayText => $"FOLDER\n{ReviewFolder}\n\nFILE THAT TRIGGERED REVIEW\n{ReviewPath}\n\n{ReviewDetails}";
     public string ReviewDeleteLabel => _currentReview is not null && _service.WillDeleteContainingFolder(_currentReview)
-        ? "Delete EXE folder"
+        ? "Delete parent folder"
         : "Delete file";
 
     private void RefreshDrives()
@@ -69,7 +77,7 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
 
         IsScanning = true;
         ScanStatus = $"Scanning {drive.DisplayName}…";
-        OutputLog = $"Started a read-only scan of {drive.RootPath}\n";
+        ResetLog($"Started a read-only scan of {drive.RootPath}");
         _temporaryFiles.Clear();
         _reviewQueue.Clear();
         SetCurrentReview(null);
@@ -86,7 +94,11 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
                 ? "No eligible temporary files found"
                 : $"{_temporaryFiles.Count:N0} temporary files · {FormatBytes(_temporaryFiles.Sum(file => file.SizeBytes))}";
             AppendLog($"Scan complete: {TemporarySummary}.");
-            AppendLog($"{_reviewQueue.Count:N0} large files inactive for 6+ months require individual review.");
+            var folderCount = result.ReviewFiles
+                .Select(GetParentFolder)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+            AppendLog($"{_reviewQueue.Count:N0} large files across {folderCount:N0} folders require review.");
             if (result.SkippedLocations > 0)
                 AppendLog($"Skipped {result.SkippedLocations:N0} protected or inaccessible locations.");
             AdvanceReview();
@@ -136,11 +148,15 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
         var candidate = _currentReview;
         if (candidate is null)
             return;
+        var folder = GetParentFolder(candidate);
         IsScanning = true;
         var result = await Task.Run(() => _service.DeleteApprovedReview(candidate));
+        var relatedCandidates = RemoveQueuedCandidatesFromFolder(folder);
         AppendLog(result.Success
-            ? $"Deleted after approval: {result.Message}"
-            : $"Could not delete {candidate.FullPath}: {result.Message}");
+            ? $"Deleted after folder approval: {result.Message}"
+            : $"Could not complete the delete decision for {folder}: {result.Message}");
+        if (relatedCandidates > 0)
+            AppendLog($"Removed {relatedCandidates:N0} additional queued file(s) from this folder review.");
         IsScanning = false;
         AdvanceReview();
     }
@@ -148,7 +164,11 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
     private void SkipReviewFile()
     {
         if (_currentReview is not null)
-            AppendLog($"Kept: {_currentReview.FullPath}");
+        {
+            var folder = GetParentFolder(_currentReview);
+            var relatedCandidates = RemoveQueuedCandidatesFromFolder(folder);
+            AppendLog($"Kept folder: {folder}. Skipped {relatedCandidates + 1:N0} queued file(s) from this folder.");
+        }
         AdvanceReview();
     }
 
@@ -184,7 +204,9 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
         _currentReview = candidate;
         OnPropertyChanged(nameof(HasReviewCandidate));
         OnPropertyChanged(nameof(ReviewPath));
+        OnPropertyChanged(nameof(ReviewFolder));
         OnPropertyChanged(nameof(ReviewDetails));
+        OnPropertyChanged(nameof(ReviewDisplayText));
         OnPropertyChanged(nameof(ReviewDeleteLabel));
         RefreshCommands();
     }
@@ -196,7 +218,41 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
         RefreshCommands();
     }
 
-    private void AppendLog(string message) => OutputLog += $"\n{DateTime.Now:HH:mm:ss}  {message}";
+    private int RemoveQueuedCandidatesFromFolder(string folder)
+    {
+        var retained = new Queue<CleanupCandidate>();
+        var removed = 0;
+        while (_reviewQueue.Count > 0)
+        {
+            var candidate = _reviewQueue.Dequeue();
+            if (GetParentFolder(candidate).Equals(folder, StringComparison.OrdinalIgnoreCase))
+                removed++;
+            else
+                retained.Enqueue(candidate);
+        }
+
+        while (retained.Count > 0)
+            _reviewQueue.Enqueue(retained.Dequeue());
+        return removed;
+    }
+
+    private static string GetParentFolder(CleanupCandidate candidate) =>
+        Path.GetDirectoryName(candidate.FullPath)?.TrimEnd(Path.DirectorySeparatorChar) ?? candidate.FullPath;
+
+    private void ResetLog(string message)
+    {
+        _logLines.Clear();
+        _logLines.Enqueue(message);
+        OutputLog = message;
+    }
+
+    private void AppendLog(string message)
+    {
+        _logLines.Enqueue($"{DateTime.Now:HH:mm:ss}  {message}");
+        while (_logLines.Count > MaximumLogLines)
+            _logLines.Dequeue();
+        OutputLog = string.Join(Environment.NewLine, _logLines);
+    }
 
     private static string FormatBytes(long bytes)
     {

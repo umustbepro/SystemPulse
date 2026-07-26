@@ -15,6 +15,11 @@ internal sealed class StorageCleanupService
         "Windows", "Program Files", "Program Files (x86)", "ProgramData", "Recovery",
         "System Volume Information", "$Recycle.Bin", "WindowsApps", "WpSystem", "MSOCache"
     };
+    private static readonly HashSet<string> ProtectedTopLevelFolderNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Users", "Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos", "OneDrive",
+        "Games", "GOG Games", "XboxGames", "SteamLibrary", "Torrent Games"
+    };
 
     public IReadOnlyList<CleanupDriveInfo> GetDrives()
     {
@@ -123,23 +128,23 @@ internal sealed class StorageCleanupService
             {
                 var fileOnly = Delete(candidate);
                 return fileOnly.Success
-                    ? new CleanupDeleteResult(true, "Deleted the EXE only; its folder contains a redirected item and was kept.")
+                    ? new CleanupDeleteResult(true, "Deleted the selected file only; its folder contains a redirected item and was kept.")
                     : fileOnly;
             }
 
             ClearReadOnlyAttributes(parent);
             Directory.Delete(parent, recursive: true);
-            return new CleanupDeleteResult(true, $"Deleted the containing folder: {parent}", true);
+            return new CleanupDeleteResult(true, $"Deleted the parent folder: {parent}", true);
         }
         catch (Exception exception)
         {
-            return new CleanupDeleteResult(false, $"The containing folder could not be deleted: {exception.Message}");
+            return new CleanupDeleteResult(false, $"The parent folder could not be deleted: {exception.Message}");
         }
     }
 
     public bool WillDeleteContainingFolder(CleanupCandidate candidate)
     {
-        if (candidate.IsTemporary || !Path.GetExtension(candidate.FullPath).Equals(".exe", StringComparison.OrdinalIgnoreCase))
+        if (candidate.IsTemporary)
             return false;
         var parent = Path.GetDirectoryName(candidate.FullPath);
         if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent))
@@ -147,9 +152,25 @@ internal sealed class StorageCleanupService
         try
         {
             var normalizedParent = NormalizeDirectory(parent);
-            return !GetProtectedDeleteBoundaries()
+            var candidateRoot = NormalizeDirectory(Path.GetPathRoot(candidate.FullPath) ?? string.Empty);
+            if (normalizedParent.Equals(candidateRoot, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            var parentInfo = new DirectoryInfo(parent);
+            if (parentInfo.Parent is not null &&
+                NormalizeDirectory(parentInfo.Parent.FullName).Equals(candidateRoot, StringComparison.OrdinalIgnoreCase) &&
+                ProtectedTopLevelFolderNames.Contains(parentInfo.Name))
+                return false;
+
+            var exactBoundaries = GetProtectedDeleteBoundaries()
+                .Select(NormalizeDirectory);
+            if (exactBoundaries.Any(boundary =>
+                    boundary.Equals(normalizedParent, StringComparison.OrdinalIgnoreCase)))
+                return false;
+
+            return !GetProtectedDeleteTrees()
                 .Select(NormalizeDirectory)
-                .Any(boundary => boundary.Equals(normalizedParent, StringComparison.OrdinalIgnoreCase));
+                .Any(boundary => normalizedParent.StartsWith(boundary, StringComparison.OrdinalIgnoreCase));
         }
         catch
         {
@@ -169,13 +190,24 @@ internal sealed class StorageCleanupService
             Environment.GetFolderPath(Environment.SpecialFolder.MyMusic),
             Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
             Path.Combine(profile, "Downloads"),
-            Path.GetPathRoot(profile) ?? string.Empty,
-            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData)
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonDocuments),
+            Path.GetPathRoot(profile) ?? string.Empty
         }.Where(path => !string.IsNullOrWhiteSpace(path)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
+
+    private static IReadOnlyList<string> GetProtectedDeleteTrees() =>
+        new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            Environment.GetFolderPath(Environment.SpecialFolder.SystemX86),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFilesX86),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData)
+        }.Where(path => !string.IsNullOrWhiteSpace(path)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
     private static bool ContainsReparsePoint(string root)
     {

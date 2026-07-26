@@ -2,7 +2,7 @@
 
 SystemPulse is a Windows 11 WPF hardware dashboard targeting .NET 10. It uses PawnIO for privileged CPU telemetry and LibreHardwareMonitor for broad motherboard, chipset, Super I/O, and embedded-controller temperature support.
 
-Current release: **v0.7.0**
+Current release: **v0.7.1**
 
 ## What is included
 
@@ -27,7 +27,7 @@ Current release: **v0.7.0**
 - Dark/light styling, custom vector window buttons, a matching embedded EXE/window icon, and a 1380 × 900 default window
 - A live system-health card that reports heavy CPU/GPU/drive activity and hot CPU/GPU temperatures
 - A themed, in-app changelog with plain-language release notes
-- A beta Storage Cleanup page with per-drive scanning, separate temporary-file cleanup, and explicit review for every older non-temporary file
+- A fixed-height Storage Cleanup workspace with hidden auto-follow logs and one Keep/Delete decision per detected parent folder
 - Configurable CPU, GPU, storage-health, and storage-temperature alerts with notification-area warnings and cooldown protection
 - Persistent 10-second telemetry history with configurable retention, recent-sample review, and CSV export
 - A live Processes page showing CPU, working memory, and per-process disk throughput, with filtering and click-again ascending/descending column sorting

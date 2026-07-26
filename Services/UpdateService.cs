@@ -46,7 +46,7 @@ public sealed class UpdateService : IDisposable
         var root = document.RootElement;
         var tag = root.GetProperty("tag_name").GetString() ?? string.Empty;
         if (!TryParseVersion(tag, out var remoteVersion))
-            return UpdateCheckResult.Failed($"The latest release tag '{tag}' is not a version such as v.07 or v0.7.0.");
+            return UpdateCheckResult.Failed($"The latest release tag '{tag}' is not a version such as v.07 or v0.7.1.");
 
         var asset = root.GetProperty("assets").EnumerateArray()
             .FirstOrDefault(item => string.Equals(

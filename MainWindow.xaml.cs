@@ -1,12 +1,15 @@
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 using Color = System.Windows.Media.Color;
 using ColorConverter = System.Windows.Media.ColorConverter;
 using SolidColorBrush = System.Windows.Media.SolidColorBrush;
+using TextBox = System.Windows.Controls.TextBox;
 using MessageBox = System.Windows.MessageBox;
 using SystemPulse.ViewModels;
 using SystemPulse.Services;
@@ -180,6 +183,18 @@ public partial class MainWindow : Window
     {
         var changelog = new ChangelogWindow { Owner = this };
         _ = changelog.ShowDialog();
+    }
+
+    private void CleanupTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (sender is not TextBox textBox)
+            return;
+
+        _ = textBox.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            textBox.CaretIndex = textBox.Text.Length;
+            textBox.ScrollToEnd();
+        }));
     }
 
     private async void UpdateButton_Click(object sender, RoutedEventArgs e)
