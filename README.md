@@ -2,7 +2,7 @@
 
 SystemPulse is a Windows 11 WPF hardware dashboard targeting .NET 10. It uses PawnIO for privileged CPU telemetry and LibreHardwareMonitor for broad motherboard, chipset, Super I/O, and embedded-controller temperature support.
 
-Current release: **v0.7.2**
+Current release: **v08.1**
 
 ## What is included
 
@@ -21,6 +21,8 @@ Current release: **v0.7.2**
 - NVIDIA temperature, utilization, and board power from the installed NVIDIA display driver, with NVAPI, `nvidia-smi`, and LibreHardwareMonitor voltage fallbacks
 - AMD Radeon temperature, utilization, voltage, and supported ASIC power from the installed AMD display driver, with a LibreHardwareMonitor voltage fallback
 - Native Windows CPU-load and physical-memory utilization metrics
+- An Overview-page Free RAM action that trims reclaimable working-set memory from noncritical applications in the current Windows session without closing them
+- A responsive Overclock (BETA) page below Performance with CPU/GPU vendor detection, direct PawnIO Intel package-power tuning without XTU, capability-probed Intel turbo-ratio controls, NVIDIA driver-backed apply/reset support, and vendor-tool handoff where a signed writable interface is unavailable
 - Per-physical-disk active time plus current read/write throughput
 - Bundled Intel PresentMon 2.4.1 console capture for accurate active-application frame time and FPS; no separate installation or visible console window
 - A bundled, official PawnIO installer that can be launched from Sensor details
@@ -68,7 +70,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-SystemPulse.ps1 
 
 The finished file is `publish/SystemPulse.exe`. The default is self-contained so users do not need .NET installed. If every target computer already has the .NET 10 Desktop Runtime, `-FrameworkDependent` creates a considerably smaller EXE.
 
-Create releases at `https://github.com/umustbepro/SystemPulse/releases` with semantic version tags such as `v0.8.0` and attach a Windows asset named `SystemPulse.exe`. The application checks that repository's latest release at startup and shows a badge when a newer version is available. Clicking the update button downloads the asset, closes every instance using the same installed EXE, atomically replaces that exact path even when the local file was renamed, restarts it, and removes the temporary updater without another confirmation or manual cleanup. GitHub's SHA-256 asset digest is verified when the API supplies one.
+Create releases at `https://github.com/umustbepro/SystemPulse/releases` with semantic version tags such as `v0.8.0` and attach a Windows asset named `SystemPulse.exe`. The application checks that repository's latest release at startup and every 120 seconds, then alternates the update icon between its plain and blue-dot states when a newer version is available. Clicking the update button downloads the asset, closes every instance using the same installed EXE, atomically replaces that exact path even when the local file was renamed, restarts it, and removes the temporary updater without another confirmation or manual cleanup. GitHub's SHA-256 asset digest is verified when the API supplies one.
 
 ## Publish one self-contained EXE in Visual Studio
 

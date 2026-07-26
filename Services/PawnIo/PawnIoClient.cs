@@ -55,6 +55,8 @@ internal sealed class PawnIoClient : IDisposable
 
     public ulong ReadMsr(uint register) => Execute("ioctl_read_msr", [register], 1)[0];
 
+    public void WriteMsr(uint register, ulong value) => Execute("ioctl_write_msr", [register, value], 0);
+
     public uint ReadSmn(uint address) => (uint)Execute("ioctl_read_smn", [address], 1)[0];
 
     private void LoadBinary(byte[] module)
@@ -81,7 +83,7 @@ internal sealed class PawnIoClient : IDisposable
         if (!NativeMethods.DeviceIoControl(
                 _handle, IoctlExecuteFunction,
                 inputBuffer, (uint)inputBuffer.Length,
-                outputBuffer, (uint)outputBuffer.Length,
+                outputBuffer.Length == 0 ? null : outputBuffer, (uint)outputBuffer.Length,
                 out var bytesReturned, IntPtr.Zero))
         {
             throw CreateIoException($"PawnIO sensor call '{functionName}' failed");

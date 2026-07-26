@@ -46,7 +46,7 @@ public sealed class UpdateService : IDisposable
         var root = document.RootElement;
         var tag = root.GetProperty("tag_name").GetString() ?? string.Empty;
         if (!TryParseVersion(tag, out var remoteVersion))
-            return UpdateCheckResult.Failed($"The latest release tag '{tag}' is not a version such as v.07 or v0.7.2.");
+            return UpdateCheckResult.Failed($"The latest release tag '{tag}' is not a version such as v07.2, v.07.2, or v0.7.2.");
 
         var asset = root.GetProperty("assets").EnumerateArray()
             .FirstOrDefault(item => string.Equals(
@@ -64,7 +64,7 @@ public sealed class UpdateService : IDisposable
             asset.TryGetProperty("size", out var size) ? size.GetInt64() : 0,
             asset.TryGetProperty("digest", out var digest) ? digest.GetString() : null);
 
-        return new UpdateCheckResult(true, remoteVersion > CurrentVersion, release, string.Empty);
+        return new UpdateCheckResult(true, IsNewerVersion(remoteVersion, CurrentVersion), release, string.Empty);
     }
 
     public async Task<string> DownloadAsync(
@@ -346,14 +346,44 @@ public sealed class UpdateService : IDisposable
 
     private static bool TryParseVersion(string value, out Version version)
     {
-        value = value.Trim().TrimStart('v', 'V');
-        var prerelease = value.IndexOfAny(['-', '+']);
+        version = new Version();
+        var normalized = value.Trim().TrimStart('v', 'V');
+        var prerelease = normalized.IndexOfAny(['-', '+']);
         if (prerelease >= 0)
-            value = value[..prerelease];
-        if (value.StartsWith('.') && Version.TryParse("0" + value, out version!))
-            return true;
-        return Version.TryParse(value, out version!);
+            normalized = normalized[..prerelease];
+
+        var hadLeadingDot = normalized.StartsWith('.');
+        normalized = normalized.TrimStart('.');
+        var components = normalized.Split(
+            '.',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (components.Length == 0 ||
+            components.Any(component => !int.TryParse(component, out _)))
+            return false;
+
+        // Older SystemPulse releases used v.07.2 and v07.2 to mean v0.7.2.
+        // Preserve normal semantic tags such as v0.7.2 and v10.1 unchanged.
+        if (hadLeadingDot || (components[0].Length > 1 && components[0][0] == '0'))
+        {
+            components[0] = int.Parse(components[0]).ToString();
+            normalized = "0." + string.Join('.', components);
+        }
+        else
+        {
+            normalized = string.Join('.', components);
+        }
+
+        return Version.TryParse(normalized, out version!);
     }
+
+    private static bool IsNewerVersion(Version remote, Version current) =>
+        NormalizeVersion(remote).CompareTo(NormalizeVersion(current)) > 0;
+
+    private static Version NormalizeVersion(Version version) => new(
+        version.Major,
+        version.Minor,
+        Math.Max(version.Build, 0),
+        Math.Max(version.Revision, 0));
 
     private static void ValidateRepository()
     {

@@ -21,7 +21,17 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel;
     private readonly TrayIconService _trayIcon;
     private readonly UpdateService _updateService = new();
+    private readonly OverclockService _overclockService = new();
+    private readonly DispatcherTimer _updateCheckTimer = new()
+    {
+        Interval = TimeSpan.FromSeconds(120)
+    };
     private UpdateRelease? _availableUpdate;
+    private OverclockCapabilities? _overclockCapabilities;
+    private bool _isCheckingForUpdates;
+    private bool _isInstallingUpdate;
+    private bool _isDetectingOverclock;
+    private bool _isApplyingOverclock;
     private bool _isDarkTheme = true;
 
     public MainWindow()
@@ -32,6 +42,7 @@ public partial class MainWindow : Window
         DataContext = _viewModel;
         _trayIcon = new TrayIconService(ShowFromTray, ExitFromTray);
         _viewModel.AlertRaised += (_, alert) => _trayIcon.Notify(alert.Title, alert.Message);
+        _updateCheckTimer.Tick += UpdateCheckTimer_Tick;
 
         Loaded += OnLoaded;
         Closed += OnClosed;
@@ -43,12 +54,15 @@ public partial class MainWindow : Window
     {
         await _viewModel.StartAsync();
         await CheckForUpdatesAsync(showCurrentResult: false);
+        await InitializeOverclockPageAsync();
+        _updateCheckTimer.Start();
         if (_viewModel.StartMinimized && _viewModel.MinimizeToTray)
             Hide();
     }
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        _updateCheckTimer.Stop();
         _trayIcon.Dispose();
         _updateService.Dispose();
         _viewModel.Dispose();
@@ -100,6 +114,14 @@ public partial class MainWindow : Window
         PerformanceScroller.ScrollToTop();
     }
 
+    private async void OverclockNav_Click(object sender, RoutedEventArgs e)
+    {
+        ShowPage(OverclockPage);
+        OverclockScroller.ScrollToTop();
+        if (_overclockCapabilities is null)
+            await InitializeOverclockPageAsync();
+    }
+
     private void SensorsNav_Click(object sender, RoutedEventArgs e)
     {
         ShowPage(SensorDetailsPage);
@@ -137,7 +159,7 @@ public partial class MainWindow : Window
 
     private void ShowPage(UIElement page)
     {
-        foreach (var item in new UIElement[] { OverviewPage, PerformancePage, ProcessesPage, NetworkPage, StorageHealthPage, HistoryPage, SensorDetailsPage, StorageCleanupPage })
+        foreach (var item in new UIElement[] { OverviewPage, PerformancePage, OverclockPage, ProcessesPage, NetworkPage, StorageHealthPage, HistoryPage, SensorDetailsPage, StorageCleanupPage })
             item.Visibility = ReferenceEquals(item, page) ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -179,6 +201,365 @@ public partial class MainWindow : Window
         ApplyWindowAppearance();
     }
 
+    private async void RamCleanupButton_Click(object sender, RoutedEventArgs e)
+    {
+        RamCleanupButton.IsEnabled = false;
+        RamCleanupButtonLabel.Text = "Clearing…";
+        RamCleanupButton.ToolTip = "Trimming reclaimable memory from user applications…";
+
+        try
+        {
+            var result = await Task.Run(RamCleanupService.TrimUserWorkingSets);
+            var freed = FormatMemorySize(result.AvailableIncreaseBytes);
+            RamCleanupButtonLabel.Text = result.AvailableIncreaseBytes > 0
+                ? $"Freed {freed}"
+                : $"Trimmed {result.TrimmedProcesses}";
+            RamCleanupButton.ToolTip = result.AvailableIncreaseBytes > 0
+                ? $"Windows made {freed} more physical memory available after trimming {result.TrimmedProcesses} user applications."
+                : $"Trimmed {result.TrimmedProcesses} user applications. Windows already had their memory available for reuse.";
+            await Task.Delay(TimeSpan.FromSeconds(4));
+        }
+        catch (Exception exception)
+        {
+            RamCleanupButtonLabel.Text = "Could not clear";
+            RamCleanupButton.ToolTip = $"RAM cleanup could not finish: {exception.Message}";
+            await Task.Delay(TimeSpan.FromSeconds(4));
+        }
+        finally
+        {
+            RamCleanupButtonLabel.Text = "Free RAM";
+            RamCleanupButton.ToolTip = "Trim reclaimable physical memory from user applications";
+            RamCleanupButton.IsEnabled = true;
+        }
+    }
+
+    private static string FormatMemorySize(long bytes)
+    {
+        if (bytes >= 1024L * 1024 * 1024)
+            return $"{bytes / 1024d / 1024d / 1024d:0.#} GB";
+        return $"{bytes / 1024d / 1024d:0} MB";
+    }
+
+    private async Task InitializeOverclockPageAsync()
+    {
+        if (_isDetectingOverclock)
+            return;
+
+        _isDetectingOverclock = true;
+        OverclockStatusText.Text = "Detecting tuning support…";
+        try
+        {
+            var capabilities = await _overclockService.DetectAsync();
+            _overclockCapabilities = capabilities;
+
+            OverclockCpuName.Text = capabilities.CpuName;
+            OverclockGpuName.Text = capabilities.GpuName;
+            CpuTuningBackendText.Text = capabilities.CpuBackend;
+            GpuTuningBackendText.Text = capabilities.GpuBackend;
+            CpuVendorTunerButtonLabel.Text = $"Open {capabilities.CpuToolLabel}";
+            GpuVendorTunerButtonLabel.Text = $"Open {capabilities.GpuToolLabel}";
+
+            SetTuningSlider(
+                CpuCoreClockSlider, CpuCoreClockValue,
+                capabilities.CanSetCpuCoreClock,
+                capabilities.CpuCoreMinimum, capabilities.CpuCoreMaximum, capabilities.CpuCoreCurrent,
+                100, "MHz", "Firmware controlled");
+            SetTuningSlider(
+                CpuMemoryClockSlider, CpuMemoryClockValue,
+                capabilities.CanSetCpuMemoryClock,
+                0, 0, 0, 100, "MHz", "Firmware controlled");
+            SetTuningSlider(
+                CpuVoltageSlider, CpuVoltageValue,
+                capabilities.CanSetCpuVoltage,
+                0, 0, 0, 5, "mV", "Firmware controlled");
+            SetTuningSlider(
+                CpuPowerSlider, CpuPowerValue,
+                capabilities.CanSetCpuPower,
+                capabilities.CpuPowerMinimum, capabilities.CpuPowerMaximum, capabilities.CpuPowerCurrent,
+                1, "W", "Firmware controlled");
+
+            SetTuningSlider(
+                GpuCoreClockSlider, GpuCoreClockValue,
+                capabilities.CanSetGpuCoreClock,
+                capabilities.GpuCoreMinimum, capabilities.GpuCoreMaximum, capabilities.GpuCoreCurrent,
+                15, "MHz", "Driver controlled");
+            SetTuningSlider(
+                GpuMemoryClockSlider, GpuMemoryClockValue,
+                capabilities.CanSetGpuMemoryClock,
+                capabilities.GpuMemoryMinimum, capabilities.GpuMemoryMaximum, capabilities.GpuMemoryCurrent,
+                25, "MHz", "Driver controlled");
+            SetTuningSlider(
+                GpuVoltageSlider, GpuVoltageValue,
+                capabilities.CanSetGpuVoltage,
+                capabilities.GpuVoltageMinimum, capabilities.GpuVoltageMaximum, capabilities.GpuVoltageCurrent,
+                5, "mV", "Driver controlled");
+            SetTuningSlider(
+                GpuPowerSlider, GpuPowerValue,
+                capabilities.CanSetGpuPower,
+                capabilities.GpuPowerMinimum, capabilities.GpuPowerMaximum, capabilities.GpuPowerCurrent,
+                1, "W", "Driver controlled");
+
+            var canApplyGpu = capabilities.CanSetGpuCoreClock ||
+                              capabilities.CanSetGpuMemoryClock ||
+                              capabilities.CanSetGpuVoltage ||
+                              capabilities.CanSetGpuPower;
+            ApplyGpuTuningButton.IsEnabled = canApplyGpu;
+            ResetGpuTuningButton.IsEnabled = canApplyGpu;
+            var canApplyCpu = capabilities.CanSetCpuCoreClock || capabilities.CanSetCpuPower;
+            ApplyCpuTuningButton.IsEnabled = canApplyCpu;
+            ResetCpuTuningButton.IsEnabled = canApplyCpu;
+            OverclockStatusText.Text = $"{capabilities.CpuVendor} CPU · {capabilities.GpuVendor} GPU · capability check complete";
+        }
+        catch (Exception exception)
+        {
+            OverclockStatusText.Text = "Tuning capability check failed";
+            GpuTuningResultText.Text = exception.Message;
+        }
+        finally
+        {
+            _isDetectingOverclock = false;
+        }
+    }
+
+    private void CpuTuningSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (CpuCoreClockValue is null || CpuMemoryClockValue is null ||
+            CpuVoltageValue is null || CpuPowerValue is null)
+            return;
+
+        if (CpuCoreClockSlider.IsEnabled)
+            CpuCoreClockValue.Text = $"{CpuCoreClockSlider.Value:0} MHz";
+        if (CpuMemoryClockSlider.IsEnabled)
+            CpuMemoryClockValue.Text = $"{CpuMemoryClockSlider.Value:0} MHz";
+        if (CpuVoltageSlider.IsEnabled)
+            CpuVoltageValue.Text = $"{CpuVoltageSlider.Value:0} mV";
+        if (CpuPowerSlider.IsEnabled)
+            CpuPowerValue.Text = $"{CpuPowerSlider.Value:0.#} W";
+    }
+
+    private async void ApplyCpuTuningButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_overclockCapabilities is null || _isApplyingOverclock)
+            return;
+
+        var profile = new OverclockProfile(
+            CpuCoreClockSlider.Value,
+            CpuMemoryClockSlider.Value,
+            CpuVoltageSlider.Value,
+            CpuPowerSlider.Value);
+        var confirmation = MessageBox.Show(
+            this,
+            $"Apply the supported Intel tuning values to {_overclockCapabilities.CpuName}?\n\n" +
+            $"All-core turbo target: {CpuCoreClockValue.Text}\n" +
+            $"Package power limit: {CpuPowerValue.Text}\n\n" +
+            "Only controls verified through PawnIO will be written. Overclocking can cause crashes, extra heat, data loss, or hardware damage. Continue only if cooling and power delivery are adequate.",
+            "Apply Intel CPU profile",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (confirmation != MessageBoxResult.Yes)
+            return;
+
+        SetCpuTuningBusy(true, "Applying verified Intel CPU controlsâ€¦");
+        try
+        {
+            var result = await _overclockService.ApplyCpuAsync(_overclockCapabilities, profile);
+            CpuTuningResultText.Text = result.Message;
+            OverclockStatusText.Text = result.Success ? "CPU profile applied" : "CPU profile rejected";
+        }
+        finally
+        {
+            SetCpuTuningBusy(false, null);
+        }
+    }
+
+    private async void ResetCpuTuningButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_overclockCapabilities is null || _isApplyingOverclock)
+            return;
+
+        var confirmation = MessageBox.Show(
+            this,
+            "Restore the Intel CPU ratio and package power controls to the values captured when this tuning session began?",
+            "Restore CPU baseline",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (confirmation != MessageBoxResult.Yes)
+            return;
+
+        SetCpuTuningBusy(true, "Restoring Intel CPU baselineâ€¦");
+        try
+        {
+            var result = await _overclockService.ResetCpuAsync(_overclockCapabilities);
+            CpuTuningResultText.Text = result.Message;
+            OverclockStatusText.Text = result.Success ? "CPU baseline restored" : "CPU reset needs attention";
+            if (result.Success)
+                await InitializeOverclockPageAsync();
+        }
+        finally
+        {
+            SetCpuTuningBusy(false, null);
+        }
+    }
+
+    private void SetCpuTuningBusy(bool busy, string? status)
+    {
+        _isApplyingOverclock = busy;
+        var capabilities = _overclockCapabilities;
+        var supported = capabilities is not null &&
+                        (capabilities.CanSetCpuCoreClock || capabilities.CanSetCpuPower);
+        ApplyCpuTuningButton.IsEnabled = !busy && supported;
+        ResetCpuTuningButton.IsEnabled = !busy && supported;
+        CpuVendorTunerButton.IsEnabled = !busy;
+        if (status is not null)
+            CpuTuningResultText.Text = status;
+    }
+
+    private static void SetTuningSlider(
+        Slider slider,
+        TextBlock valueLabel,
+        bool enabled,
+        double minimum,
+        double maximum,
+        double current,
+        double step,
+        string unit,
+        string unavailableText)
+    {
+        slider.IsEnabled = enabled;
+        if (!enabled || maximum <= minimum)
+        {
+            valueLabel.Text = unavailableText;
+            return;
+        }
+
+        slider.Minimum = Math.Floor(minimum);
+        slider.Maximum = Math.Ceiling(maximum);
+        slider.TickFrequency = step;
+        slider.SmallChange = step;
+        slider.LargeChange = step * 4;
+        slider.IsSnapToTickEnabled = true;
+        slider.Value = Math.Clamp(current, slider.Minimum, slider.Maximum);
+        valueLabel.Text = unit == "W" ? $"{slider.Value:0.#} {unit}" : $"{slider.Value:0} {unit}";
+    }
+
+    private void GpuTuningSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (GpuCoreClockValue is null || GpuMemoryClockValue is null ||
+            GpuVoltageValue is null || GpuPowerValue is null)
+            return;
+
+        if (GpuCoreClockSlider.IsEnabled)
+            GpuCoreClockValue.Text = $"{GpuCoreClockSlider.Value:0} MHz";
+        if (GpuMemoryClockSlider.IsEnabled)
+            GpuMemoryClockValue.Text = $"{GpuMemoryClockSlider.Value:0} MHz";
+        if (GpuVoltageSlider.IsEnabled)
+            GpuVoltageValue.Text = $"{GpuVoltageSlider.Value:0} mV";
+        if (GpuPowerSlider.IsEnabled)
+            GpuPowerValue.Text = $"{GpuPowerSlider.Value:0.#} W";
+    }
+
+    private async void ApplyGpuTuningButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_overclockCapabilities is null || _isApplyingOverclock)
+            return;
+
+        var profile = new OverclockProfile(
+            GpuCoreClockSlider.Value,
+            GpuMemoryClockSlider.Value,
+            GpuVoltageSlider.Value,
+            GpuPowerSlider.Value);
+        var confirmation = MessageBox.Show(
+            this,
+            $"Apply the supported tuning values to {_overclockCapabilities.GpuName}?\n\n" +
+            $"Core target: {GpuCoreClockValue.Text}\n" +
+            $"Memory target: {GpuMemoryClockValue.Text}\n" +
+            $"Voltage: {GpuVoltageValue.Text}\n" +
+            $"Power limit: {GpuPowerValue.Text}\n\n" +
+            "Overclocking can cause instability, extra heat, data loss, or hardware damage. Continue only if cooling and power delivery are adequate.",
+            "Apply overclock profile",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (confirmation != MessageBoxResult.Yes)
+            return;
+
+        SetGpuTuningBusy(true, "Applying supported GPU controls…");
+        try
+        {
+            var result = await _overclockService.ApplyGpuAsync(_overclockCapabilities, profile);
+            GpuTuningResultText.Text = result.Message;
+            OverclockStatusText.Text = result.Success ? "GPU profile applied" : "GPU profile rejected";
+        }
+        finally
+        {
+            SetGpuTuningBusy(false, null);
+        }
+    }
+
+    private async void ResetGpuTuningButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_overclockCapabilities is null || _isApplyingOverclock)
+            return;
+
+        var confirmation = MessageBox.Show(
+            this,
+            "Restore the GPU clock controls and power limit to the values reported by the driver?",
+            "Restore GPU defaults",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (confirmation != MessageBoxResult.Yes)
+            return;
+
+        SetGpuTuningBusy(true, "Restoring GPU defaults…");
+        try
+        {
+            var result = await _overclockService.ResetGpuAsync(_overclockCapabilities);
+            GpuTuningResultText.Text = result.Message;
+            OverclockStatusText.Text = result.Success ? "GPU defaults restored" : "GPU reset needs attention";
+            if (result.Success)
+                await InitializeOverclockPageAsync();
+        }
+        finally
+        {
+            SetGpuTuningBusy(false, null);
+        }
+    }
+
+    private void SetGpuTuningBusy(bool busy, string? status)
+    {
+        _isApplyingOverclock = busy;
+        var capabilities = _overclockCapabilities;
+        var supported = capabilities is not null &&
+                        (capabilities.CanSetGpuCoreClock || capabilities.CanSetGpuMemoryClock ||
+                         capabilities.CanSetGpuVoltage || capabilities.CanSetGpuPower);
+        ApplyGpuTuningButton.IsEnabled = !busy && supported;
+        ResetGpuTuningButton.IsEnabled = !busy && supported;
+        GpuVendorTunerButton.IsEnabled = !busy;
+        if (status is not null)
+            GpuTuningResultText.Text = status;
+    }
+
+    private void CpuVendorTunerButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_overclockCapabilities is null)
+            return;
+        var result = OverclockService.OpenVendorTuner(
+            _overclockCapabilities.CpuToolPath,
+            _overclockCapabilities.CpuToolUrl,
+            _overclockCapabilities.CpuToolLabel);
+        CpuTuningBackendText.Text = result.Message;
+    }
+
+    private void GpuVendorTunerButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_overclockCapabilities is null)
+            return;
+        var result = OverclockService.OpenVendorTuner(
+            _overclockCapabilities.GpuToolPath,
+            _overclockCapabilities.GpuToolUrl,
+            _overclockCapabilities.GpuToolLabel);
+        GpuTuningResultText.Text = result.Message;
+    }
+
     private void ChangelogButton_Click(object sender, RoutedEventArgs e)
     {
         var changelog = new ChangelogWindow { Owner = this };
@@ -199,10 +580,14 @@ public partial class MainWindow : Window
 
     private async void UpdateButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_isInstallingUpdate)
+            return;
+
         var release = _availableUpdate ?? await CheckForUpdatesAsync(showCurrentResult: true);
         if (release is null)
             return;
 
+        _isInstallingUpdate = true;
         UpdateButton.IsEnabled = false;
         UpdateButton.ToolTip = "Downloading update…";
         try
@@ -218,11 +603,22 @@ public partial class MainWindow : Window
             MessageBox.Show(this, exception.Message, "SystemPulse update", MessageBoxButton.OK, MessageBoxImage.Error);
             UpdateButton.ToolTip = "Update failed; click to try again";
             UpdateButton.IsEnabled = true;
+            _isInstallingUpdate = false;
         }
+    }
+
+    private async void UpdateCheckTimer_Tick(object? sender, EventArgs e)
+    {
+        if (!_isInstallingUpdate)
+            await CheckForUpdatesAsync(showCurrentResult: false);
     }
 
     private async Task<UpdateRelease?> CheckForUpdatesAsync(bool showCurrentResult)
     {
+        if (_isCheckingForUpdates || _isInstallingUpdate)
+            return _availableUpdate;
+
+        _isCheckingForUpdates = true;
         UpdateButton.IsEnabled = false;
         UpdateButton.ToolTip = "Checking GitHub for updates…";
         try
@@ -230,7 +626,7 @@ public partial class MainWindow : Window
             var result = await _updateService.CheckAsync();
             if (!result.Success)
             {
-                SetUpdateIconAnimation(updateAvailable: false);
+                SetUpdateIconAnimation(updateAvailable: _availableUpdate is not null);
                 UpdateButton.ToolTip = result.Error;
                 if (showCurrentResult)
                     MessageBox.Show(this, result.Error, "SystemPulse update", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -240,7 +636,6 @@ public partial class MainWindow : Window
             if (!result.IsUpdateAvailable || result.Release is null)
             {
                 _availableUpdate = null;
-                UpdateBadge.Visibility = Visibility.Collapsed;
                 SetUpdateIconAnimation(updateAvailable: false);
                 UpdateButton.ToolTip = $"SystemPulse {UpdateService.CurrentVersion.ToString(3)} is up to date";
                 if (showCurrentResult)
@@ -249,14 +644,13 @@ public partial class MainWindow : Window
             }
 
             _availableUpdate = result.Release;
-            UpdateBadge.Visibility = Visibility.Visible;
             SetUpdateIconAnimation(updateAvailable: true);
             UpdateButton.ToolTip = $"Update {result.Release.Tag} is available";
             return result.Release;
         }
         catch (Exception exception)
         {
-            SetUpdateIconAnimation(updateAvailable: false);
+            SetUpdateIconAnimation(updateAvailable: _availableUpdate is not null);
             UpdateButton.ToolTip = $"Update check unavailable: {exception.Message}";
             if (showCurrentResult)
                 MessageBox.Show(this, $"The update check could not be completed.\n\n{exception.Message}", "SystemPulse update", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -264,7 +658,9 @@ public partial class MainWindow : Window
         }
         finally
         {
-            UpdateButton.IsEnabled = true;
+            _isCheckingForUpdates = false;
+            if (!_isInstallingUpdate)
+                UpdateButton.IsEnabled = true;
         }
     }
 
@@ -278,6 +674,20 @@ public partial class MainWindow : Window
             RepeatBehavior = RepeatBehavior.Forever
         };
         UpdateIconRotation.BeginAnimation(RotateTransform.AngleProperty, rotation, HandoffBehavior.SnapshotAndReplace);
+
+        UpdateBadge.BeginAnimation(UIElement.OpacityProperty, null);
+        UpdateBadge.Visibility = updateAvailable ? Visibility.Visible : Visibility.Collapsed;
+        if (!updateAvailable)
+            return;
+
+        var badgeToggle = new DoubleAnimationUsingKeyFrames
+        {
+            Duration = TimeSpan.FromSeconds(2.4),
+            RepeatBehavior = RepeatBehavior.Forever
+        };
+        badgeToggle.KeyFrames.Add(new DiscreteDoubleKeyFrame(0, KeyTime.FromPercent(0)));
+        badgeToggle.KeyFrames.Add(new DiscreteDoubleKeyFrame(1, KeyTime.FromPercent(0.5)));
+        UpdateBadge.BeginAnimation(UIElement.OpacityProperty, badgeToggle, HandoffBehavior.SnapshotAndReplace);
     }
 
     private static void SetThemeResource(string colorKey, string brushKey, string value)
