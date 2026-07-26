@@ -1,9 +1,0 @@
-bin/
-obj/
-publish/
-.vs/
-.nuget/
-.appdata/
-.packagesource/
-*.user
-*.suo
