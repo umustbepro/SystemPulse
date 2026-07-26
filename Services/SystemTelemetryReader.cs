@@ -44,10 +44,18 @@ internal sealed class SystemTelemetryReader
     {
         var status = new MemoryStatus { Length = (uint)Marshal.SizeOf<MemoryStatus>() };
         if (!NativeMethods.GlobalMemoryStatusEx(ref status))
-            return new MemoryTelemetry(null, "System memory");
+            return new MemoryTelemetry(null, null, null, null, "System memory");
 
         var gibibytes = status.TotalPhysical / 1024d / 1024d / 1024d;
-        return new MemoryTelemetry(status.MemoryLoad, $"{gibibytes:0.#} GB system memory");
+        var usedPhysical = status.TotalPhysical >= status.AvailablePhysical
+            ? status.TotalPhysical - status.AvailablePhysical
+            : 0;
+        return new MemoryTelemetry(
+            status.MemoryLoad,
+            usedPhysical,
+            status.AvailablePhysical,
+            status.TotalPhysical,
+            $"{gibibytes:0.#} GB system memory");
     }
 
     private static string ReadCpuName()
@@ -161,4 +169,9 @@ internal sealed class SystemTelemetryReader
     }
 }
 
-internal sealed record MemoryTelemetry(float? Load, string Name);
+internal sealed record MemoryTelemetry(
+    float? Load,
+    ulong? UsedBytes,
+    ulong? AvailableBytes,
+    ulong? TotalBytes,
+    string Name);

@@ -22,6 +22,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly TelemetryHistoryService _history = new();
     private readonly AlertService _alerts = new();
     private readonly SettingsService _settingsService = new();
+    private readonly DriveTemperatureHistoryService _driveTemperatureHistory = new();
     private readonly AppSettings _settings;
     private readonly DispatcherTimer _timer;
     private readonly Dictionary<string, Queue<double>> _storageHistoryByDevice = new(StringComparer.OrdinalIgnoreCase);
@@ -48,6 +49,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _cpuLoad = "—";
     private string _gpuLoad = "—";
     private string _memoryLoad = "—";
+    private string _memoryUsed = "Not available";
+    private string _memoryAvailable = "Not available";
+    private string _memoryTotal = "Not available";
     private string _fanSpeed = "—";
     private string _cpuStatus = "Detecting";
     private string _gpuStatus = "Detecting";
@@ -164,6 +168,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public string CpuLoad { get => _cpuLoad; private set => Set(ref _cpuLoad, value); }
     public string GpuLoad { get => _gpuLoad; private set => Set(ref _gpuLoad, value); }
     public string MemoryLoad { get => _memoryLoad; private set => Set(ref _memoryLoad, value); }
+    public string MemoryUsed { get => _memoryUsed; private set => Set(ref _memoryUsed, value); }
+    public string MemoryAvailable { get => _memoryAvailable; private set => Set(ref _memoryAvailable, value); }
+    public string MemoryTotal { get => _memoryTotal; private set => Set(ref _memoryTotal, value); }
     public string FanSpeed { get => _fanSpeed; private set => Set(ref _fanSpeed, value); }
     public string CpuStatus { get => _cpuStatus; private set => Set(ref _cpuStatus, value); }
     public string GpuStatus { get => _gpuStatus; private set => Set(ref _gpuStatus, value); }
@@ -363,6 +370,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         CpuLoad = FormatPercent(snapshot.CpuLoad);
         GpuLoad = FormatPercent(snapshot.GpuLoad);
         MemoryLoad = FormatPercent(snapshot.MemoryLoad);
+        MemoryUsed = snapshot.MemoryUsedBytes.HasValue ? FormatBytes(snapshot.MemoryUsedBytes.Value) : "Not available";
+        MemoryAvailable = snapshot.MemoryAvailableBytes.HasValue ? FormatBytes(snapshot.MemoryAvailableBytes.Value) : "Not available";
+        MemoryTotal = snapshot.MemoryTotalBytes.HasValue ? FormatBytes(snapshot.MemoryTotalBytes.Value) : "Not available";
         UpdateStorageDevices(snapshot.StorageDevices, snapshot.StoragePerformance);
         UpdateFrameApplications(snapshot.FrameApplications, snapshot.FrameProcess);
         MotherboardTemperature = FormatTemperature(snapshot.MotherboardTemperature);
@@ -380,7 +390,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
         (CpuStatus, CpuStatusColor) = GetTemperatureStatus(snapshot.CpuTemperature, 75, 90);
         (GpuStatus, GpuStatusColor) = GetTemperatureStatus(snapshot.GpuTemperature, 76, 88);
-        (MemoryStatus, MemoryStatusColor) = GetTemperatureStatus(snapshot.MemoryTemperature, 60, 75);
+        (MemoryStatus, MemoryStatusColor) = GetMemoryUsageStatus(snapshot.MemoryLoad);
         (MotherboardStatus, MotherboardStatusColor) = GetTemperatureStatus(snapshot.MotherboardTemperature, 65, 80);
         OnPropertyChanged(nameof(CpuStatus));
         OnPropertyChanged(nameof(CpuStatusColor));
@@ -537,7 +547,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         foreach (var device in devices)
         {
             performanceById.TryGetValue(device.DeviceId, out var devicePerformance);
-            StorageDevices.Add(new StorageDeviceItem(device, devicePerformance));
+            var recordedMaximum = _driveTemperatureHistory.Observe(device);
+            StorageDevices.Add(new StorageDeviceItem(device, devicePerformance, recordedMaximum));
         }
 
         var warnings = devices.Count(device => device.Health is "Warning" or "Unhealthy");
@@ -617,7 +628,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         var active = snapshots.Where(item => item.Status == "Up").ToList();
         var down = active.Aggregate(0UL, (total, item) => total + item.ReceivedBytesPerSecond);
         var up = active.Aggregate(0UL, (total, item) => total + item.SentBytesPerSecond);
-        NetworkSummary = $"{active.Count} active adapter(s) · down {FormatRate(down)} · up {FormatRate(up)}";
+        NetworkSummary = $"{active.Count} active connection(s) · down {FormatRate(down)} · up {FormatRate(up)}";
     }
 
     private void LoadRecentHistory()
@@ -672,6 +683,17 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     }
 
     private void SaveSetting() => _settingsService.Save(_settings);
+
+    public void SaveSettings() => SaveSetting();
+
+    public bool IsUpdateIgnored(Version version) =>
+        Version.TryParse(_settings.IgnoredUpdateVersion, out var ignored) && ignored == version;
+
+    public void IgnoreUpdate(Version version)
+    {
+        _settings.IgnoredUpdateVersion = version.ToString(3);
+        SaveSetting();
+    }
 
     private void ApplySelectedStorageDevice(bool addHistory)
     {
@@ -795,6 +817,17 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         return ("Normal", "#58D6C7");
     }
 
+    private static (string Label, string Color) GetMemoryUsageStatus(float? value)
+    {
+        if (!value.HasValue)
+            return ("Unavailable", "#959DAF");
+        if (value >= 90)
+            return ("Very high", "#FF6B7A");
+        if (value >= 75)
+            return ("High", "#FFB454");
+        return ("Normal", "#58D6C7");
+    }
+
     private static string FormatTemperature(float? value, string unavailable = "Unavailable") =>
         value.HasValue ? $"{value:0}°" : unavailable;
 
@@ -870,13 +903,17 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         if (_disposed)
             return;
         _timer.Stop();
+        SaveSetting();
         _monitor.Dispose();
         _disposed = true;
     }
 
     public sealed class StorageDeviceItem
     {
-        public StorageDeviceItem(StorageDeviceSnapshot device, StoragePerformanceSnapshot? performance)
+        public StorageDeviceItem(
+            StorageDeviceSnapshot device,
+            StoragePerformanceSnapshot? performance,
+            float? recordedMaximum)
         {
             DeviceId = device.DeviceId;
             DisplayName = device.DisplayName;
@@ -886,7 +923,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             Temperature = device.Temperature;
             Health = device.Health;
             Wear = device.Wear;
-            TemperatureMaximum = device.TemperatureMaximum;
+            TemperatureMaximum = recordedMaximum;
             PowerOnHours = device.PowerOnHours;
             ReadErrorsTotal = device.ReadErrorsTotal;
             ReadErrorsUncorrected = device.ReadErrorsUncorrected;
@@ -929,7 +966,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         public string RemainingLife => Wear.HasValue ? $"{Math.Max(0, 100 - Wear.Value)}% estimated" : "Not reported";
         public string WearText => Wear.HasValue ? $"{Wear.Value}% used" : "Not reported";
         public string PowerOnHoursText => PowerOnHours.HasValue ? $"{PowerOnHours:N0} hours" : "Not reported";
-        public string MaximumTemperatureText => TemperatureMaximum.HasValue ? $"{TemperatureMaximum:0} °C" : "Not reported";
+        public string MaximumTemperatureText => TemperatureMaximum.HasValue ? $"{TemperatureMaximum:0} °C recorded" : "Waiting for temperature data";
         public string ErrorSummary => ReadErrorsTotal.HasValue || WriteErrorsTotal.HasValue || ReadErrorsUncorrected.HasValue || WriteErrorsUncorrected.HasValue
             ? $"Read {(ReadErrorsTotal ?? 0):N0} · write {(WriteErrorsTotal ?? 0):N0} · uncorrected {(ReadErrorsUncorrected ?? 0) + (WriteErrorsUncorrected ?? 0):N0}"
             : "Not reported by drive";

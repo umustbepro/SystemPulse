@@ -30,6 +30,7 @@ public partial class MainWindow : Window
     private OverclockCapabilities? _overclockCapabilities;
     private bool _isCheckingForUpdates;
     private bool _isInstallingUpdate;
+    private bool _isPromptingUpdate;
     private bool _isDetectingOverclock;
     private bool _isApplyingOverclock;
     private bool _isDarkTheme = true;
@@ -37,6 +38,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        FitInitialWindowToWorkArea();
         SetUpdateIconAnimation(updateAvailable: false);
         _viewModel = new MainViewModel();
         DataContext = _viewModel;
@@ -50,10 +52,23 @@ public partial class MainWindow : Window
         SourceInitialized += (_, _) => ApplyWindowAppearance();
     }
 
+    private void FitInitialWindowToWorkArea()
+    {
+        var workArea = SystemParameters.WorkArea;
+        Width = Math.Min(Width, Math.Max(MinWidth, workArea.Width - 48));
+        Height = Math.Min(Height, Math.Max(MinHeight, workArea.Height - 48));
+    }
+
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         await _viewModel.StartAsync();
-        await CheckForUpdatesAsync(showCurrentResult: false);
+        var startupUpdate = await CheckForUpdatesAsync(showCurrentResult: false);
+        if (startupUpdate is not null)
+        {
+            await HandleDetectedUpdateAsync(startupUpdate);
+            if (_isInstallingUpdate)
+                return;
+        }
         await InitializeOverclockPageAsync();
         _updateCheckTimer.Start();
         if (_viewModel.StartMinimized && _viewModel.MinimizeToTray)
@@ -227,7 +242,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            RamCleanupButtonLabel.Text = "Free RAM";
+            RamCleanupButtonLabel.Text = "Free unused RAM";
             RamCleanupButton.ToolTip = "Trim reclaimable physical memory from user applications";
             RamCleanupButton.IsEnabled = true;
         }
@@ -587,30 +602,71 @@ public partial class MainWindow : Window
         if (release is null)
             return;
 
+        await InstallUpdateAsync(release, showErrors: true);
+    }
+
+    private async Task InstallUpdateAsync(UpdateRelease release, bool showErrors)
+    {
+        if (_isInstallingUpdate)
+            return;
+
         _isInstallingUpdate = true;
         UpdateButton.IsEnabled = false;
         UpdateButton.ToolTip = "Downloading update…";
         try
         {
+            _viewModel.SaveSettings();
             var progress = new Progress<double>(value => UpdateButton.ToolTip = $"Downloading update… {value:0}%");
             var downloaded = await _updateService.DownloadAsync(release, progress);
             UpdateButton.ToolTip = "Installing update…";
+            _viewModel.SaveSettings();
             UpdateService.LaunchInstaller(downloaded);
             Close();
         }
         catch (Exception exception)
         {
-            MessageBox.Show(this, exception.Message, "SystemPulse update", MessageBoxButton.OK, MessageBoxImage.Error);
+            if (showErrors)
+                MessageBox.Show(this, exception.Message, "SystemPulse update", MessageBoxButton.OK, MessageBoxImage.Error);
             UpdateButton.ToolTip = "Update failed; click to try again";
             UpdateButton.IsEnabled = true;
             _isInstallingUpdate = false;
         }
     }
 
+    private async Task HandleDetectedUpdateAsync(UpdateRelease release)
+    {
+        if (_isInstallingUpdate || _isPromptingUpdate || _viewModel.IsUpdateIgnored(release.Version))
+            return;
+
+        _isPromptingUpdate = true;
+        try
+        {
+            var prompt = new UpdatePromptWindow(release) { Owner = this };
+            _ = prompt.ShowDialog();
+            if (prompt.Choice == UpdatePromptChoice.Skip)
+            {
+                _viewModel.IgnoreUpdate(release.Version);
+                UpdateButton.ToolTip = $"Update {release.Tag} was skipped; click to install it manually";
+                SetUpdateIconAnimation(updateAvailable: true);
+                return;
+            }
+
+            await InstallUpdateAsync(release, showErrors: false);
+        }
+        finally
+        {
+            _isPromptingUpdate = false;
+        }
+    }
+
     private async void UpdateCheckTimer_Tick(object? sender, EventArgs e)
     {
         if (!_isInstallingUpdate)
-            await CheckForUpdatesAsync(showCurrentResult: false);
+        {
+            var release = await CheckForUpdatesAsync(showCurrentResult: false);
+            if (release is not null)
+                await HandleDetectedUpdateAsync(release);
+        }
     }
 
     private async Task<UpdateRelease?> CheckForUpdatesAsync(bool showCurrentResult)
@@ -677,6 +733,7 @@ public partial class MainWindow : Window
 
         UpdateBadge.BeginAnimation(UIElement.OpacityProperty, null);
         UpdateBadge.Visibility = updateAvailable ? Visibility.Visible : Visibility.Collapsed;
+        UpdateAvailableText.Visibility = updateAvailable ? Visibility.Visible : Visibility.Collapsed;
         if (!updateAvailable)
             return;
 

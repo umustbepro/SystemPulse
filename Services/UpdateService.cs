@@ -172,12 +172,12 @@ public sealed class UpdateService : IDisposable
             var fullPath = Path.GetFullPath(path);
             if (Path.GetFileName(fullPath).StartsWith("SystemPulse-update-", StringComparison.OrdinalIgnoreCase) &&
                 Path.GetExtension(fullPath).Equals(".exe", StringComparison.OrdinalIgnoreCase))
-                TryDelete(fullPath);
+                await DeleteWithRetryAsync(fullPath, TimeSpan.FromSeconds(12));
             var current = Environment.ProcessPath;
             if (!string.IsNullOrWhiteSpace(current))
             {
-                TryDelete(current + ".previous");
-                TryDelete(current + ".update");
+                await DeleteWithRetryAsync(current + ".previous", TimeSpan.FromSeconds(12));
+                await DeleteWithRetryAsync(current + ".update", TimeSpan.FromSeconds(12));
             }
         }
         catch
@@ -409,6 +409,23 @@ public sealed class UpdateService : IDisposable
     private static void TryDelete(string path)
     {
         try { if (File.Exists(path)) File.Delete(path); } catch { }
+    }
+
+    private static async Task DeleteWithRetryAsync(string path, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (File.Exists(path) && DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                File.Delete(path);
+                return;
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            await Task.Delay(250);
+        }
+        TryDelete(path);
     }
 
     public void Dispose() => _client.Dispose();

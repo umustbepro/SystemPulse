@@ -13,7 +13,7 @@ NAV=[("⌂","Overview","overview"),("ϟ","Performance","performance"),("↗","Ov
 def shell(page,title,desc,right="Updated 19:24:56\nEvery 2 seconds"):
  im=Image.new("RGB",(W,H),BG);d=ImageDraw.Draw(im)
  d.rectangle((0,0,W,52),fill=SURFACE);d.line((0,51,W,51),fill=BORDER);d.rectangle((0,52,218,H),fill=SURFACE);d.line((217,52,217,H),fill=BORDER)
- rr(d,(18,13,44,39),6,ACCENT,ACCENT);txt(d,(31,26),"∿",17,"#071311",True,anchor="mm");txt(d,(54,26),"SystemPulse",15,TEXT,True,anchor="lm");txt(d,(151,26),"v08.2",12,MUTED,anchor="lm");txt(d,(238,26),"Hardware monitor",12,MUTED,anchor="lm")
+ rr(d,(18,13,44,39),6,ACCENT,ACCENT);txt(d,(31,26),"∿",17,"#071311",True,anchor="mm");txt(d,(54,26),"SystemPulse",15,TEXT,True,anchor="lm");txt(d,(151,26),"v08.7",12,MUTED,anchor="lm");txt(d,(238,26),"Hardware monitor",12,MUTED,anchor="lm")
  for x,s in [(1194,"⟳"),(1240,"−"),(1286,"□"),(1332,"×")]: txt(d,(x,26),s,17,MUTED,anchor="mm")
  txt(d,(26,72),"MONITOR",10,MUTED,True)
  y=88

@@ -66,6 +66,9 @@ public sealed class HardwareMonitorService : IDisposable
                     gpu.ElectricalSource,
                     null,
                     memory.Load,
+                    memory.UsedBytes,
+                    memory.AvailableBytes,
+                    memory.TotalBytes,
                     null,
                     _system.CpuName,
                     gpu.Name,
@@ -87,7 +90,7 @@ public sealed class HardwareMonitorService : IDisposable
             {
                 return new SensorSnapshot(
                     null, "PawnIO unavailable", null, null, null, "CPU electrical telemetry unavailable",
-                    null, null, null, null, "GPU electrical telemetry unavailable", null, null, null,
+                    null, null, null, null, "GPU electrical telemetry unavailable", null, null, null, null, null, null,
                     _system.CpuName, "GPU", "System memory", Array.Empty<StorageDeviceSnapshot>(),
                     Array.Empty<StoragePerformanceSnapshot>(), null, "No active 3D presentation",
                     Array.Empty<FrameApplicationSnapshot>(),

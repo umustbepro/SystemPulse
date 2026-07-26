@@ -14,6 +14,7 @@ public sealed class AppSettings
     public int GpuTemperatureAlert { get; set; } = 88;
     public int StorageTemperatureAlert { get; set; } = 70;
     public int HistoryRetentionDays { get; set; } = 7;
+    public string? IgnoredUpdateVersion { get; set; }
 }
 
 public sealed record ProcessTelemetrySnapshot(

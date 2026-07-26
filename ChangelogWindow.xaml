@@ -48,7 +48,16 @@
 
                 <Border Style="{StaticResource ChangeCard}" BorderBrush="#5058D6C7">
                     <StackPanel>
-                        <Grid><TextBlock Text="v0.7.0" FontSize="18" FontWeight="SemiBold" /><Border HorizontalAlignment="Right" Background="#1858D6C7" CornerRadius="10" Padding="9,3"><TextBlock Text="CURRENT" Foreground="{DynamicResource Accent}" FontSize="10" FontWeight="Bold" /></Border></Grid>
+                        <Grid><TextBlock Text="v0.8.6" FontSize="18" FontWeight="SemiBold" /><Border HorizontalAlignment="Right" Background="#1858D6C7" CornerRadius="10" Padding="9,3"><TextBlock Text="CURRENT" Foreground="{DynamicResource Accent}" FontSize="10" FontWeight="Bold" /></Border></Grid>
+                        <TextBlock Text="&#x2022; Added permanent maximum-temperature tracking for every detected drive." Style="{StaticResource ChangeLine}" />
+                        <TextBlock Text="&#x2022; Drive temperature records now update whenever SystemPulse detects a new high and remain saved after restarts and updates." Style="{StaticResource ChangeLine}" />
+                        <TextBlock Text="&#x2022; Fixed the changelog opening too large or partly off-screen on vertical, secondary, and mixed-resolution monitors." Style="{StaticResource ChangeLine}" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource ChangeCard}">
+                    <StackPanel>
+                        <TextBlock Text="v0.7.0" FontSize="18" FontWeight="SemiBold" />
                         <TextBlock Text="&#x2022; Added LibreHardwareMonitor motherboard, chipset, Super I/O, and embedded-controller temperature discovery with an ACPI fallback." Style="{StaticResource ChangeLine}" />
                         <TextBlock Text="&#x2022; Added automatic GitHub Release checks and one-click single-EXE updates." Style="{StaticResource ChangeLine}" />
                         <TextBlock Text="&#x2022; Added an open-folder icon to large-file review and dedicated EXE-folder cleanup after explicit approval." Style="{StaticResource ChangeLine}" />
