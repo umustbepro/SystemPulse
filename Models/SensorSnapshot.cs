@@ -8,6 +8,8 @@ public sealed record SensorSnapshot(
     float? CpuPowerWatts,
     string CpuElectricalSource,
     float? GpuTemperature,
+    float? GpuHotspotTemperature,
+    string GpuHotspotTemperatureSource,
     float? GpuLoad,
     float? GpuVoltage,
     float? GpuPowerWatts,
@@ -55,7 +57,9 @@ public sealed record StorageDeviceSnapshot(
     string OperationalStatus = "Unknown",
     string PhysicalLocation = "Not reported",
     ulong? UnsafeShutdowns = null,
-    string HealthDataSource = "Windows storage provider");
+    string HealthDataSource = "Windows storage provider",
+    ulong? VolumeCapacityBytes = null,
+    ulong? UsedCapacityBytes = null);
 
 public sealed record StoragePerformanceSnapshot(
     string DeviceId,
@@ -66,4 +70,8 @@ public sealed record StoragePerformanceSnapshot(
 public sealed record FrameApplicationSnapshot(
     int ProcessId,
     string DisplayName,
-    float? FrameTimeMilliseconds);
+    float? FrameTimeMilliseconds,
+    float? FrameTimeP95Milliseconds = null,
+    float? FrameTimeMaximumMilliseconds = null,
+    float? FrameTimeDeviationMilliseconds = null,
+    float? StutterPercent = null);

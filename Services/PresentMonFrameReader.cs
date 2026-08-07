@@ -37,10 +37,17 @@ internal sealed class PresentMonFrameReader : IDisposable
                     var displayName = regularApplications.TryGetValue(processId, out var regularName)
                         ? regularName
                         : $"{sample?.ProcessName ?? "Application"} ({processId})";
+                    var statistics = sample is null
+                        ? FrameStatistics.Unavailable
+                        : CalculateStatistics(sample.FrameTimes);
                     return new FrameApplicationSnapshot(
                         processId,
                         displayName,
-                        sample is null ? null : (float)sample.FrameTimes.Average());
+                        statistics.Average,
+                        statistics.P95,
+                        statistics.Maximum,
+                        statistics.Deviation,
+                        statistics.StutterPercent);
                 })
                 .OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -69,10 +76,7 @@ internal sealed class PresentMonFrameReader : IDisposable
                         string.IsNullOrWhiteSpace(process.MainWindowTitle))
                         continue;
 
-                    var executableName = process.ProcessName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
-                        ? process.ProcessName
-                        : $"{process.ProcessName}.exe";
-                    applications[process.Id] = $"{executableName} ({process.Id})";
+                    applications[process.Id] = $"{GetFriendlyApplicationName(process)} ({process.Id})";
                 }
                 catch
                 {
@@ -82,6 +86,54 @@ internal sealed class PresentMonFrameReader : IDisposable
         }
 
         return applications;
+    }
+
+    private static string GetFriendlyApplicationName(Process process)
+    {
+        var executableName = process.ProcessName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            ? process.ProcessName
+            : $"{process.ProcessName}.exe";
+        try
+        {
+            var path = process.MainModule?.FileName;
+            if (string.IsNullOrWhiteSpace(path))
+                return executableName;
+
+            var version = FileVersionInfo.GetVersionInfo(path);
+            var productName = version.ProductName?.Trim();
+            if (!string.IsNullOrWhiteSpace(productName) &&
+                !productName.Equals("Microsoft® Windows® Operating System", StringComparison.OrdinalIgnoreCase) &&
+                !productName.Equals(executableName, StringComparison.OrdinalIgnoreCase))
+                return $"{productName} · {executableName}";
+        }
+        catch
+        {
+            // Protected applications can still be identified by executable name.
+        }
+
+        return executableName;
+    }
+
+    private static FrameStatistics CalculateStatistics(IEnumerable<double> values)
+    {
+        var ordered = values.Where(value => double.IsFinite(value) && value > 0).OrderBy(value => value).ToArray();
+        if (ordered.Length == 0)
+            return FrameStatistics.Unavailable;
+
+        var average = ordered.Average();
+        var median = ordered[ordered.Length / 2];
+        var p95 = ordered[Math.Clamp((int)Math.Ceiling(ordered.Length * 0.95) - 1, 0, ordered.Length - 1)];
+        var maximum = ordered[^1];
+        var deviation = Math.Sqrt(ordered.Average(value => Math.Pow(value - average, 2)));
+        var stutterThreshold = Math.Max(median * 1.5, median + 6);
+        var stutterPercent = ordered.Count(value => value >= stutterThreshold) * 100d / ordered.Length;
+
+        return new FrameStatistics(
+            (float)average,
+            (float)p95,
+            (float)maximum,
+            (float)deviation,
+            (float)stutterPercent);
     }
 
     private void EnsureRunning()
@@ -246,6 +298,16 @@ internal sealed class PresentMonFrameReader : IDisposable
         public string ProcessName { get; set; } = processName;
         public DateTime LastFrame { get; set; }
         public Queue<double> FrameTimes { get; } = new();
+    }
+
+    private readonly record struct FrameStatistics(
+        float? Average,
+        float? P95,
+        float? Maximum,
+        float? Deviation,
+        float? StutterPercent)
+    {
+        public static FrameStatistics Unavailable { get; } = new(null, null, null, null, null);
     }
 }
 

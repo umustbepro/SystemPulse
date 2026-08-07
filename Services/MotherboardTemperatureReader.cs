@@ -9,17 +9,14 @@ namespace SystemPulse.Services;
 /// </summary>
 internal sealed class MotherboardTemperatureReader : IDisposable
 {
-    private readonly Computer _computer = new()
-    {
-        IsMotherboardEnabled = true,
-        IsControllerEnabled = true,
-        IsGpuEnabled = true
-    };
+    private Computer Computer => SharedLibreHardware.Computer;
     private bool _isOpen;
     private bool _disposed;
 
     public MotherboardTemperatureSample Read()
     {
+        lock (SharedLibreHardware.SyncRoot)
+        {
         if (_disposed)
             return Unavailable("LibreHardwareMonitor reader is closed");
 
@@ -28,7 +25,7 @@ internal sealed class MotherboardTemperatureReader : IDisposable
             EnsureOpen();
             var candidates = new List<BoardTemperatureCandidate>();
 
-            foreach (var hardware in _computer.Hardware.Where(item => item.HardwareType == HardwareType.Motherboard))
+            foreach (var hardware in Computer.Hardware.Where(item => item.HardwareType == HardwareType.Motherboard))
                 CollectBoardTemperatures(hardware, hardware.Name, candidates);
 
             var preferred = candidates
@@ -52,17 +49,20 @@ internal sealed class MotherboardTemperatureReader : IDisposable
         // ACPI remains a useful firmware fallback on machines whose Super I/O or EC is
         // not exposed by the board. It is never preferred over a valid Libre reading.
         return ReadAcpiFallback();
+        }
     }
 
     public GpuVoltageSample ReadGpuVoltage(string gpuName, int physicalGpuIndex)
     {
+        lock (SharedLibreHardware.SyncRoot)
+        {
         if (_disposed)
             return GpuVoltageSample.Unavailable;
 
         try
         {
             EnsureOpen();
-            var hardware = _computer.Hardware
+            var hardware = Computer.Hardware
                 .Where(item => item.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd)
                 .Where(item => MatchesGpuVendor(item.HardwareType, gpuName))
                 .ToArray();
@@ -95,13 +95,61 @@ internal sealed class MotherboardTemperatureReader : IDisposable
             CloseComputer();
             return GpuVoltageSample.Unavailable;
         }
+        }
+    }
+
+    public GpuHotspotTemperatureSample ReadGpuHotspotTemperature(string gpuName, int physicalGpuIndex)
+    {
+        lock (SharedLibreHardware.SyncRoot)
+        {
+        if (_disposed)
+            return GpuHotspotTemperatureSample.Unavailable;
+
+        try
+        {
+            EnsureOpen();
+            var hardware = Computer.Hardware
+                .Where(item => item.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel)
+                .Where(item => MatchesGpuVendor(item.HardwareType, gpuName))
+                .ToArray();
+
+            if (hardware.Length == 0)
+                return GpuHotspotTemperatureSample.Unavailable;
+
+            var candidates = new List<GpuHotspotTemperatureCandidate>();
+            for (var index = 0; index < hardware.Length; index++)
+            {
+                var device = hardware[index];
+                CollectGpuHotspotTemperatures(
+                    device,
+                    device.Name,
+                    ScoreGpuMatch(device.Name, gpuName) + (index == physicalGpuIndex ? 25 : 0),
+                    candidates);
+            }
+
+            var preferred = candidates
+                .OrderByDescending(candidate => candidate.Score)
+                .ThenByDescending(candidate => candidate.Temperature)
+                .FirstOrDefault();
+            return preferred is null
+                ? GpuHotspotTemperatureSample.Unavailable
+                : new GpuHotspotTemperatureSample(
+                    preferred.Temperature,
+                    $"LibreHardwareMonitor · {preferred.HardwareName} · {preferred.SensorName}");
+        }
+        catch
+        {
+            CloseComputer();
+            return GpuHotspotTemperatureSample.Unavailable;
+        }
+        }
     }
 
     private void EnsureOpen()
     {
         if (_isOpen)
             return;
-        _computer.Open();
+        SharedLibreHardware.Acquire();
         _isOpen = true;
     }
 
@@ -159,6 +207,39 @@ internal sealed class MotherboardTemperatureReader : IDisposable
             CollectGpuVoltages(child, gpuName, hardwareScore, candidates);
     }
 
+    private static void CollectGpuHotspotTemperatures(
+        IHardware hardware,
+        string gpuName,
+        int hardwareScore,
+        ICollection<GpuHotspotTemperatureCandidate> candidates)
+    {
+        hardware.Update();
+        foreach (var sensor in hardware.Sensors)
+        {
+            if (sensor.SensorType != SensorType.Temperature || sensor.Value is not float temperature ||
+                !float.IsFinite(temperature) || temperature is < -30 or > 150)
+                continue;
+
+            var sensorName = sensor.Name.ToUpperInvariant();
+            var sensorScore = ContainsAny(sensorName, "GPU HOT SPOT", "GPU HOTSPOT") ? 120
+                : ContainsAny(sensorName, "HOT SPOT", "HOTSPOT") ? 110
+                : sensorName.Contains("GPU JUNCTION") ? 105
+                : sensorName.Contains("JUNCTION") && !ContainsAny(sensorName, "MEMORY", "VRAM") ? 95
+                : -1;
+            if (sensorScore < 0)
+                continue;
+
+            candidates.Add(new GpuHotspotTemperatureCandidate(
+                temperature,
+                sensor.Name,
+                gpuName,
+                hardwareScore + sensorScore));
+        }
+
+        foreach (var child in hardware.SubHardware)
+            CollectGpuHotspotTemperatures(child, gpuName, hardwareScore, candidates);
+    }
+
     private static bool MatchesGpuVendor(HardwareType hardwareType, string gpuName)
     {
         var normalized = gpuName.ToUpperInvariant();
@@ -166,6 +247,8 @@ internal sealed class MotherboardTemperatureReader : IDisposable
             return hardwareType == HardwareType.GpuNvidia;
         if (normalized.Contains("AMD") || normalized.Contains("RADEON"))
             return hardwareType == HardwareType.GpuAmd;
+        if (normalized.Contains("INTEL") || normalized.Contains("ARC"))
+            return hardwareType == HardwareType.GpuIntel;
         return true;
     }
 
@@ -266,7 +349,7 @@ internal sealed class MotherboardTemperatureReader : IDisposable
     {
         if (!_isOpen)
             return;
-        try { _computer.Close(); } catch { }
+        SharedLibreHardware.Release();
         _isOpen = false;
     }
 
@@ -289,6 +372,12 @@ internal sealed class MotherboardTemperatureReader : IDisposable
         string SensorName,
         string HardwareName,
         int Score);
+
+    private sealed record GpuHotspotTemperatureCandidate(
+        float Temperature,
+        string SensorName,
+        string HardwareName,
+        int Score);
 }
 
 internal sealed record MotherboardTemperatureSample(float? Temperature, string Source);
@@ -296,4 +385,10 @@ internal sealed record GpuVoltageSample(float? Voltage, string Source)
 {
     public static GpuVoltageSample Unavailable { get; } =
         new(null, "LibreHardwareMonitor did not expose GPU core voltage");
+}
+
+internal sealed record GpuHotspotTemperatureSample(float? Temperature, string Source)
+{
+    public static GpuHotspotTemperatureSample Unavailable { get; } =
+        new(null, "GPU hotspot sensor not exposed by the graphics driver");
 }

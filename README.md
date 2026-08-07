@@ -2,7 +2,7 @@
 
 SystemPulse is a simple Windows 11 hardware monitor. It shows temperatures, usage, power, storage health, running processes, network activity, alerts, and cleanup tools in one window.
 
-**Current version: v08.7**
+**Current version: v09.5**
 
 > [!IMPORTANT]
 > SystemPulse asks for administrator permission when it starts. This is required so the bundled PawnIO driver can read supported CPU sensors. PawnIO is installed automatically on the first launch.
@@ -30,7 +30,10 @@ Overview is the quickest way to check the computer:
 - CPU, GPU, storage, and motherboard temperatures
 - CPU and GPU voltage, power, and current load when supported
 - Live activity graphs and simple Normal/Warning status labels
+- Live game-stutter and frame-pacing diagnosis in the bottom-left monitoring card
+- Clickable fixes matched to the active game and the CPU, GPU, memory, or drive condition causing the alert
 - Storage model, type, capacity, and health
+- **Game Mode** temporarily saves the current power plan, enables High performance and Windows Game Mode when available, and restores the exact previous settings when switched off. Missing Windows gaming components are safely skipped.
 - **Free RAM** asks Windows and noncritical applications to release reclaimable working memory. It does not close applications or delete files.
 
 ### Performance
@@ -41,10 +44,19 @@ Performance shows what the computer is doing right now:
 
 - CPU and GPU load history
 - GPU frame rate and frame time for the actively presenting game or application
+- Larger CPU, GPU, frame-time, and storage graphs with clearer scales and 120-second history
+- CPU voltage and package power, GPU core/hotspot temperatures and board power, plus drive temperature and capacity usage
+- Frame-time consistency, spike, and stutter analysis for the active game
 - Physical-drive activity, read speed, and write speed
 - CPU and GPU power information where the hardware exposes it
 
 Frame information comes from the bundled PresentMon capture engine. If no 3D application is presenting frames, FPS is shown as unavailable instead of being estimated.
+
+Live Game Monitoring and the Frame Application selector only report executables verified as games. SystemPulse, ChatGPT, Discord, browsers, launchers, media applications, overlays, and development tools are excluded even when they use GPU acceleration.
+
+System and game-performance alerts remain in the Live Monitoring card for 30 seconds after the condition clears, giving the user time to open the matched Suggestions window.
+
+When closing background software may help, Suggestions names the specific non-system apps using the relevant CPU, GPU, memory, or drive resources. Each candidate includes its live usage and an **End task** button. Save your work and only end an app you recognize and are not currently using.
 
 ### Overclock (Beta)
 
@@ -91,6 +103,7 @@ Disconnected or virtual adapters may appear with zero traffic.
 Storage creates one health card for every physical drive:
 
 - Model, serial number, firmware, interface, and capacity
+- Live purple capacity-usage bar with the used percentage for each physical drive's mounted volumes
 - Temperature and operational state
 - SSD remaining life or wear information when reported
 - Power-on hours and hardware error counters when available
@@ -148,6 +161,7 @@ SystemPulse checks [this repository's Releases page](https://github.com/umustbep
 - The top-right update icon rotates slowly during normal checks.
 - A larger blue dot alternates with the icon when a newer release is available.
 - Clicking the icon downloads only the newest `SystemPulse.exe`.
+- After an automatic update, SystemPulse reopens minimized in the background so a running game keeps focus.
 - SystemPulse closes the matching running instance, replaces the current EXE, restarts it, and removes the temporary updater automatically.
 - A release-provided SHA-256 digest is verified when GitHub supplies one.
 
@@ -196,7 +210,7 @@ To create a smaller framework-dependent build for computers that already have th
 
 1. Build the self-contained EXE.
 2. Open [GitHub Releases](https://github.com/umustbepro/SystemPulse/releases).
-3. Create a semantic version tag, such as `v0.8.7`.
+3. Create a semantic version tag, such as `v0.9.5`.
 4. Upload the finished EXE as `SystemPulse.exe`.
 5. Publish the release.
 

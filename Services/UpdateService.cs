@@ -16,7 +16,7 @@ public sealed class UpdateService : IDisposable
     public UpdateService()
     {
         _client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        _client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("SystemPulse", CurrentVersion.ToString(3)));
+        _client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("SystemPulse", FormatVersion(CurrentVersion)));
         _client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         _client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
     }
@@ -151,10 +151,15 @@ public sealed class UpdateService : IDisposable
             File.Copy(source, staged, true);
             await ReplaceTargetWithRetryAsync(staged, target, backup);
 
-            var restart = new ProcessStartInfo(target) { UseShellExecute = true };
+            var restart = new ProcessStartInfo(target)
+            {
+                UseShellExecute = true,
+                WindowStyle = ProcessWindowStyle.Minimized
+            };
             restart.ArgumentList.Add("--cleanup-update");
             restart.ArgumentList.Add(source);
             restart.ArgumentList.Add(Environment.ProcessId.ToString());
+            restart.ArgumentList.Add("--updated-minimized");
             _ = Process.Start(restart) ?? throw new InvalidOperationException("The updated application could not be restarted.");
             return new UpdateApplyResult(true, "Update installed.");
         }
@@ -384,6 +389,10 @@ public sealed class UpdateService : IDisposable
         version.Minor,
         Math.Max(version.Build, 0),
         Math.Max(version.Revision, 0));
+
+    public static string FormatVersion(Version version) => version.Revision >= 0
+        ? version.ToString(4)
+        : version.Build >= 0 ? version.ToString(3) : version.ToString(2);
 
     private static void ValidateRepository()
     {

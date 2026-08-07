@@ -20,10 +20,20 @@ public sealed class AppSettings
 public sealed record ProcessTelemetrySnapshot(
     int ProcessId,
     string Name,
+    long StartTimeUtcTicks,
     double CpuPercent,
+    double GpuPercent,
     ulong WorkingSetBytes,
     ulong ReadBytesPerSecond,
-    ulong WriteBytesPerSecond);
+    ulong WriteBytesPerSecond,
+    ProcessCategory Category);
+
+public enum ProcessCategory
+{
+    System,
+    App,
+    Game
+}
 
 public sealed record NetworkAdapterSnapshot(
     string Id,
@@ -42,9 +52,21 @@ public sealed record HistorySample(
     float? CpuTemperature,
     float? CpuLoad,
     float? GpuTemperature,
+    float? GpuHotspotTemperature,
     float? GpuLoad,
     float? MemoryLoad,
     float? StorageTemperature,
     float? StorageLoad);
 
 public sealed record MonitorAlert(string Key, string Title, string Message, DateTime Timestamp);
+
+public sealed record PerformanceSuggestion(
+    string Title,
+    string Explanation,
+    IReadOnlyList<string> Steps);
+
+public sealed record ResourceProcessCandidate(
+    int ProcessId,
+    long StartTimeUtcTicks,
+    string Name,
+    string ResourceSummary);

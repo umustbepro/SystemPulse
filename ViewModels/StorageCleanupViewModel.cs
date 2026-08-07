@@ -121,26 +121,37 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
         if (!HasTemporaryFiles)
             return;
         IsScanning = true;
-        var candidates = _temporaryFiles.ToList();
-        _temporaryFiles.Clear();
-        var result = await Task.Run(() =>
+        try
         {
-            var deleted = 0;
-            long bytes = 0;
-            foreach (var candidate in candidates)
+            var candidates = _temporaryFiles.ToList();
+            _temporaryFiles.Clear();
+            var result = await Task.Run(() =>
             {
-                var deletion = _service.Delete(candidate);
-                if (!deletion.Success)
-                    continue;
-                deleted++;
-                bytes += candidate.SizeBytes;
-            }
-            return (deleted, bytes);
-        });
-        TemporarySummary = "Temporary cleanup complete";
-        AppendLog($"Deleted {result.deleted:N0} temporary files and recovered {FormatBytes(result.bytes)}.");
-        IsScanning = false;
-        NotifyCandidateState();
+                var deleted = 0;
+                long bytes = 0;
+                foreach (var candidate in candidates)
+                {
+                    var deletion = _service.Delete(candidate);
+                    if (!deletion.Success)
+                        continue;
+                    deleted++;
+                    bytes += candidate.SizeBytes;
+                }
+                return (deleted, bytes);
+            });
+            TemporarySummary = "Temporary cleanup complete";
+            AppendLog($"Deleted {result.deleted:N0} temporary files and recovered {FormatBytes(result.bytes)}.");
+        }
+        catch (Exception exception)
+        {
+            TemporarySummary = "Temporary cleanup could not be completed";
+            AppendLog($"Temporary cleanup error: {exception.Message}");
+        }
+        finally
+        {
+            IsScanning = false;
+            NotifyCandidateState();
+        }
     }
 
     private async Task DeleteReviewFileAsync(object? parameter)
@@ -150,15 +161,25 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
             return;
         var folder = GetParentFolder(candidate);
         IsScanning = true;
-        var result = await Task.Run(() => _service.DeleteApprovedReview(candidate));
-        var relatedCandidates = RemoveQueuedCandidatesFromFolder(folder);
-        AppendLog(result.Success
-            ? $"Deleted after folder approval: {result.Message}"
-            : $"Could not complete the delete decision for {folder}: {result.Message}");
-        if (relatedCandidates > 0)
-            AppendLog($"Removed {relatedCandidates:N0} additional queued file(s) from this folder review.");
-        IsScanning = false;
-        AdvanceReview();
+        try
+        {
+            var result = await Task.Run(() => _service.DeleteApprovedReview(candidate));
+            var relatedCandidates = RemoveQueuedCandidatesFromFolder(folder);
+            AppendLog(result.Success
+                ? $"Deleted after folder approval: {result.Message}"
+                : $"Could not complete the delete decision for {folder}: {result.Message}");
+            if (relatedCandidates > 0)
+                AppendLog($"Removed {relatedCandidates:N0} additional queued file(s) from this folder review.");
+        }
+        catch (Exception exception)
+        {
+            AppendLog($"Folder cleanup error for {folder}: {exception.Message}");
+        }
+        finally
+        {
+            IsScanning = false;
+            AdvanceReview();
+        }
     }
 
     private void SkipReviewFile()
@@ -304,6 +325,16 @@ public sealed class StorageCleanupViewModel : INotifyPropertyChanged
     {
         public event EventHandler? CanExecuteChanged { add => CommandManager.RequerySuggested += value; remove => CommandManager.RequerySuggested -= value; }
         public bool CanExecute(object? parameter) => canExecute?.Invoke(parameter) ?? true;
-        public async void Execute(object? parameter) => await execute(parameter);
+        public async void Execute(object? parameter)
+        {
+            try
+            {
+                await execute(parameter);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine($"Storage cleanup command failed: {exception}");
+            }
+        }
     }
 }

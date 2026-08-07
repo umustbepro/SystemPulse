@@ -180,9 +180,7 @@ internal sealed class CpuTemperatureReader : IDisposable
     private CpuTemperatureSample ReadAmd()
     {
         var raw = _client!.ReadSmn(AmdThermalRegister);
-        var temperature = (float)((raw >> 21) * 0.125);
-        if ((raw & AmdTemperatureOffsetFlag) != 0)
-            temperature -= 49f;
+        var temperature = DecodeAmd(raw);
 
         var electrical = ReadAmdElectrical();
 
@@ -300,6 +298,14 @@ internal sealed class CpuTemperatureReader : IDisposable
         var distance = (int)((raw >> 16) & 0x7F);
         var value = tjMax - distance;
         return value is > 0 and < 130 ? value : null;
+    }
+
+    private static float? DecodeAmd(uint raw)
+    {
+        var value = (float)((raw >> 21) * 0.125);
+        if ((raw & AmdTemperatureOffsetFlag) != 0)
+            value -= 49f;
+        return float.IsFinite(value) && value is >= -30 and <= 150 ? value : null;
     }
 
     private static CpuVendor DetectVendor()

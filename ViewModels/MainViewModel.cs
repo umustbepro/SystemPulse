@@ -16,6 +16,7 @@ namespace SystemPulse.ViewModels;
 public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 {
     private const int HistoryLimit = 60;
+    private static readonly TimeSpan AlertHoldDuration = TimeSpan.FromSeconds(30);
     private readonly HardwareMonitorService _monitor;
     private readonly ProcessTelemetryService _processTelemetry = new();
     private readonly NetworkTelemetryService _networkTelemetry = new();
@@ -39,6 +40,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _cpuTemperature = "—";
     private string _cpuTemperatureSource = "Detecting";
     private string _gpuTemperature = "—";
+    private string _gpuHotspotTemperature = "Unavailable";
+    private string _gpuHotspotTemperatureSource = "Detecting GPU hotspot sensor";
     private string _cpuVoltage = "Unavailable";
     private string _cpuPower = "Unavailable";
     private string _cpuElectricalSource = "Detecting CPU electrical sensors";
@@ -55,9 +58,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _fanSpeed = "—";
     private string _cpuStatus = "Detecting";
     private string _gpuStatus = "Detecting";
+    private string _gpuHotspotStatus = "Detecting";
     private string _memoryStatus = "Detecting";
     private string _cpuStatusColor = "#959DAF";
     private string _gpuStatusColor = "#959DAF";
+    private string _gpuHotspotStatusColor = "#959DAF";
     private string _memoryStatusColor = "#959DAF";
     private StorageDeviceItem? _selectedStorageDevice;
     private FrameApplicationItem? _selectedFrameApplication;
@@ -76,6 +81,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _systemHealthColor = "#58D6C7";
     private string _systemHealthBackground = "#0B58D6C7";
     private string _systemHealthBorder = "#3058D6C7";
+    private string _performanceSuggestionsTitle = "System suggestions";
+    private bool _hasPerformanceSuggestions;
+    private PerformanceDiagnosticResult? _heldPerformanceDiagnostic;
+    private DateTime _performanceDiagnosticHoldUntilUtc;
     private string _motherboardTemperature = "Unavailable";
     private string _motherboardSource = "Detecting LibreHardwareMonitor board sensors";
     private string _motherboardStatus = "Detecting";
@@ -87,6 +96,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _historyStatus = "Waiting for the first persistent sample";
     private string _processSummary = "Collecting process activity";
     private string _processFilter = string.Empty;
+    private string _processCategoryFilter = "General";
     private string _processSortProperty = nameof(ProcessTelemetryItem.CpuValue);
     private ListSortDirection _processSortDirection = ListSortDirection.Descending;
     private string _networkSummary = "Collecting adapter activity";
@@ -110,6 +120,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         ExportHistoryCommand = new RelayCommand(_ => ExportHistory());
         OpenHistoryFolderCommand = new RelayCommand(_ => OpenHistoryFolder());
         ProcessSortCommand = new RelayCommand(SortProcesses);
+        ProcessCategoryCommand = new RelayCommand(SetProcessCategory);
+        EndProcessCommand = new RelayCommand(EndProcess);
         ProcessView = CollectionViewSource.GetDefaultView(Processes);
         ProcessView.Filter = FilterProcess;
         ApplyProcessSort(_processSortProperty, _processSortDirection);
@@ -122,6 +134,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public ObservableCollection<double> CpuTemperatureHistory { get; } = new();
     public ObservableCollection<double> GpuTemperatureHistory { get; } = new();
+    public ObservableCollection<double> GpuHotspotTemperatureHistory { get; } = new();
     public ObservableCollection<double> MemoryLoadHistory { get; } = new();
     public ObservableCollection<double> StorageTemperatureHistory { get; } = new();
     public ObservableCollection<double> MotherboardTemperatureHistory { get; } = new();
@@ -136,6 +149,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<NetworkAdapterItem> NetworkAdapters { get; } = new();
     public ObservableCollection<HistoryItem> RecentHistory { get; } = new();
     public ObservableCollection<AlertItem> RecentAlerts { get; } = new();
+    public ObservableCollection<PerformanceSuggestion> PerformanceSuggestions { get; } = new();
+    public ObservableCollection<ResourceProcessCandidate> PerformanceCloseCandidates { get; } = new();
 
     public ICommand RefreshCommand { get; }
     public ICommand RestartElevatedCommand { get; }
@@ -143,6 +158,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public ICommand ExportHistoryCommand { get; }
     public ICommand OpenHistoryFolderCommand { get; }
     public ICommand ProcessSortCommand { get; }
+    public ICommand ProcessCategoryCommand { get; }
+    public ICommand EndProcessCommand { get; }
 
     public string ProcessNameSortLabel => SortLabel("PROCESS", nameof(ProcessTelemetryItem.DisplayName));
     public string ProcessCpuSortLabel => SortLabel("CPU", nameof(ProcessTelemetryItem.CpuValue));
@@ -158,6 +175,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public string CpuTemperature { get => _cpuTemperature; private set => Set(ref _cpuTemperature, value); }
     public string CpuTemperatureSource { get => _cpuTemperatureSource; private set => Set(ref _cpuTemperatureSource, value); }
     public string GpuTemperature { get => _gpuTemperature; private set => Set(ref _gpuTemperature, value); }
+    public string GpuHotspotTemperature { get => _gpuHotspotTemperature; private set => Set(ref _gpuHotspotTemperature, value); }
+    public string GpuHotspotTemperatureSource { get => _gpuHotspotTemperatureSource; private set => Set(ref _gpuHotspotTemperatureSource, value); }
     public string CpuVoltage { get => _cpuVoltage; private set => Set(ref _cpuVoltage, value); }
     public string CpuPower { get => _cpuPower; private set => Set(ref _cpuPower, value); }
     public string CpuElectricalSource { get => _cpuElectricalSource; private set => Set(ref _cpuElectricalSource, value); }
@@ -174,9 +193,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public string FanSpeed { get => _fanSpeed; private set => Set(ref _fanSpeed, value); }
     public string CpuStatus { get => _cpuStatus; private set => Set(ref _cpuStatus, value); }
     public string GpuStatus { get => _gpuStatus; private set => Set(ref _gpuStatus, value); }
+    public string GpuHotspotStatus { get => _gpuHotspotStatus; private set => Set(ref _gpuHotspotStatus, value); }
     public string MemoryStatus { get => _memoryStatus; private set => Set(ref _memoryStatus, value); }
     public string CpuStatusColor { get => _cpuStatusColor; private set => Set(ref _cpuStatusColor, value); }
     public string GpuStatusColor { get => _gpuStatusColor; private set => Set(ref _gpuStatusColor, value); }
+    public string GpuHotspotStatusColor { get => _gpuHotspotStatusColor; private set => Set(ref _gpuHotspotStatusColor, value); }
     public string MemoryStatusColor { get => _memoryStatusColor; private set => Set(ref _memoryStatusColor, value); }
     public FrameApplicationItem? SelectedFrameApplication
     {
@@ -211,6 +232,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public string SystemHealthColor { get => _systemHealthColor; private set => Set(ref _systemHealthColor, value); }
     public string SystemHealthBackground { get => _systemHealthBackground; private set => Set(ref _systemHealthBackground, value); }
     public string SystemHealthBorder { get => _systemHealthBorder; private set => Set(ref _systemHealthBorder, value); }
+    public string PerformanceSuggestionsTitle { get => _performanceSuggestionsTitle; private set => Set(ref _performanceSuggestionsTitle, value); }
+    public bool HasPerformanceSuggestions { get => _hasPerformanceSuggestions; private set => Set(ref _hasPerformanceSuggestions, value); }
     public string MotherboardTemperature { get => _motherboardTemperature; private set => Set(ref _motherboardTemperature, value); }
     public string MotherboardModel => _monitor.MotherboardName;
     public string MotherboardSource { get => _motherboardSource; private set => Set(ref _motherboardSource, value); }
@@ -231,9 +254,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         set
         {
             if (Set(ref _processFilter, value))
+            {
                 ProcessView.Refresh();
+                UpdateProcessSummary();
+            }
         }
     }
+    public string ProcessCategoryFilter { get => _processCategoryFilter; private set => Set(ref _processCategoryFilter, value); }
     public string NetworkSummary { get => _networkSummary; private set => Set(ref _networkSummary, value); }
     public string StorageSummary { get => _storageSummary; private set => Set(ref _storageSummary, value); }
 
@@ -341,9 +368,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             var processTask = Task.Run(_processTelemetry.Read);
             var networkTask = Task.Run(_networkTelemetry.Read);
             await Task.WhenAll(snapshotTask, processTask, networkTask);
-            Apply(snapshotTask.Result);
             UpdateProcesses(processTask.Result);
+            Apply(snapshotTask.Result, processTask.Result);
             UpdateNetworkAdapters(networkTask.Result);
+        }
+        catch (Exception exception)
+        {
+            StatusMessage = $"Monitoring refresh could not finish: {exception.Message}";
         }
         finally
         {
@@ -352,7 +383,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    private void Apply(SensorSnapshot snapshot)
+    private void Apply(SensorSnapshot snapshot, IReadOnlyList<ProcessTelemetrySnapshot> processes)
     {
         CpuName = snapshot.CpuName;
         GpuName = snapshot.GpuName;
@@ -360,6 +391,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         CpuTemperature = FormatTemperature(snapshot.CpuTemperature);
         CpuTemperatureSource = snapshot.CpuTemperatureSource;
         GpuTemperature = FormatTemperature(snapshot.GpuTemperature);
+        GpuHotspotTemperature = FormatTemperature(snapshot.GpuHotspotTemperature);
+        GpuHotspotTemperatureSource = snapshot.GpuHotspotTemperatureSource;
         CpuVoltage = FormatVoltage(snapshot.CpuVoltage);
         CpuPower = FormatPower(snapshot.CpuPowerWatts);
         CpuElectricalSource = snapshot.CpuElectricalSource;
@@ -390,12 +423,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
         (CpuStatus, CpuStatusColor) = GetTemperatureStatus(snapshot.CpuTemperature, 75, 90);
         (GpuStatus, GpuStatusColor) = GetTemperatureStatus(snapshot.GpuTemperature, 76, 88);
+        (GpuHotspotStatus, GpuHotspotStatusColor) = GetTemperatureStatus(snapshot.GpuHotspotTemperature, 90, 105);
         (MemoryStatus, MemoryStatusColor) = GetMemoryUsageStatus(snapshot.MemoryLoad);
         (MotherboardStatus, MotherboardStatusColor) = GetTemperatureStatus(snapshot.MotherboardTemperature, 65, 80);
         OnPropertyChanged(nameof(CpuStatus));
         OnPropertyChanged(nameof(CpuStatusColor));
         OnPropertyChanged(nameof(GpuStatus));
         OnPropertyChanged(nameof(GpuStatusColor));
+        OnPropertyChanged(nameof(GpuHotspotStatus));
+        OnPropertyChanged(nameof(GpuHotspotStatusColor));
         OnPropertyChanged(nameof(MemoryStatus));
         OnPropertyChanged(nameof(MemoryStatusColor));
         OnPropertyChanged(nameof(MotherboardStatus));
@@ -403,6 +439,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
         AddHistory(CpuTemperatureHistory, snapshot.CpuTemperature);
         AddHistory(GpuTemperatureHistory, snapshot.GpuTemperature);
+        AddHistory(GpuHotspotTemperatureHistory, snapshot.GpuHotspotTemperature);
         AddHistory(MemoryLoadHistory, snapshot.MemoryLoad);
         AddHistory(CpuLoadHistory, snapshot.CpuLoad);
         AddHistory(GpuLoadHistory, snapshot.GpuLoad);
@@ -410,11 +447,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         UpdateStorageLoadHistories(snapshot.StoragePerformance);
         ApplySelectedStorageDevice(addHistory: false);
         AddHistory(MotherboardTemperatureHistory, snapshot.MotherboardTemperature);
-        EvaluateSystemHealth(snapshot);
+        EvaluateSystemHealth(snapshot, processes);
 
         var historySample = new HistorySample(
             snapshot.Timestamp, snapshot.CpuTemperature, snapshot.CpuLoad, snapshot.GpuTemperature,
-            snapshot.GpuLoad, snapshot.MemoryLoad, SelectedStorageDevice?.Temperature, SelectedStorageDevice?.Load);
+            snapshot.GpuHotspotTemperature, snapshot.GpuLoad, snapshot.MemoryLoad,
+            SelectedStorageDevice?.Temperature, SelectedStorageDevice?.Load);
         if (_history.TryAppend(historySample, HistoryRetentionDays))
         {
             RecentHistory.Add(new HistoryItem(historySample));
@@ -447,8 +485,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         IReadOnlyList<FrameApplicationSnapshot> applications,
         string defaultProcess)
     {
+        var games = applications.Where(GameProcessClassifier.IsGame).ToArray();
         var selectedProcessId = SelectedFrameApplication?.ProcessId;
-        foreach (var application in applications)
+        foreach (var application in games)
         {
             if (!_frameHistoryByProcess.TryGetValue(application.ProcessId, out var history))
             {
@@ -463,7 +502,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
 
         FrameApplications.Clear();
-        foreach (var application in applications)
+        foreach (var application in games)
             FrameApplications.Add(new FrameApplicationItem(application));
 
         SelectedFrameApplication = FrameApplications.FirstOrDefault(item => item.ProcessId == selectedProcessId)
@@ -482,7 +521,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         {
             FrameTime = "Unavailable";
             FramesPerSecond = "—";
-            FrameProcess = "No active 3D presentation";
+            FrameProcess = "No active game presentation";
             return;
         }
 
@@ -500,40 +539,51 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    private void EvaluateSystemHealth(SensorSnapshot snapshot)
+    private void EvaluateSystemHealth(SensorSnapshot snapshot, IReadOnlyList<ProcessTelemetrySnapshot> processes)
     {
-        var issues = new List<string>();
+        var activeApplication = snapshot.FrameApplications.FirstOrDefault(item =>
+            item.DisplayName.Equals(snapshot.FrameProcess, StringComparison.OrdinalIgnoreCase));
+        var diagnostic = PerformanceDiagnosticService.Evaluate(snapshot, activeApplication, processes);
+        var nowUtc = DateTime.UtcNow;
 
-        if (snapshot.CpuLoad is >= 90 || snapshot.CpuTemperature is >= 90)
-            issues.Add($"CPU heavy load: {FormatPercent(snapshot.CpuLoad)} · {FormatHealthTemperature(snapshot.CpuTemperature)}");
-
-        if (snapshot.GpuLoad is >= 95 || snapshot.GpuTemperature is >= 88)
-            issues.Add($"GPU heavy load: {FormatPercent(snapshot.GpuLoad)} · {FormatHealthTemperature(snapshot.GpuTemperature)}");
-
-        var deviceNames = snapshot.StorageDevices.ToDictionary(device => device.DeviceId, device => device.DisplayName, StringComparer.OrdinalIgnoreCase);
-        foreach (var device in snapshot.StoragePerformance.Where(device => device.Load is >= 95))
+        if (diagnostic.IsAlert)
         {
-            var name = deviceNames.TryGetValue(device.DeviceId, out var displayName)
-                ? displayName
-                : $"Physical disk {device.DeviceId}";
-            issues.Add($"{name} is under heavy load ({device.Load:0}%)");
+            _heldPerformanceDiagnostic = diagnostic;
+            _performanceDiagnosticHoldUntilUtc = nowUtc.Add(AlertHoldDuration);
+        }
+        else if (_heldPerformanceDiagnostic is not null && nowUtc < _performanceDiagnosticHoldUntilUtc)
+        {
+            diagnostic = _heldPerformanceDiagnostic;
+        }
+        else
+        {
+            _heldPerformanceDiagnostic = null;
+            _performanceDiagnosticHoldUntilUtc = DateTime.MinValue;
         }
 
-        if (issues.Count == 0)
+        SystemHealthHeadline = diagnostic.Headline;
+        SystemHealthMessage = diagnostic.Message;
+        PerformanceSuggestionsTitle = diagnostic.SuggestionsTitle;
+        PerformanceSuggestions.Clear();
+        foreach (var suggestion in diagnostic.Suggestions)
+            PerformanceSuggestions.Add(suggestion);
+        PerformanceCloseCandidates.Clear();
+        foreach (var candidate in diagnostic.CloseCandidates)
+            PerformanceCloseCandidates.Add(candidate);
+        HasPerformanceSuggestions = PerformanceSuggestions.Count > 0;
+
+        if (diagnostic.IsAlert)
         {
-            SystemHealthHeadline = "LIVE MONITORING";
-            SystemHealthMessage = "System is nominal";
+            SystemHealthColor = "#FF6B7A";
+            SystemHealthBackground = "#18FF6B7A";
+            SystemHealthBorder = "#50FF6B7A";
+        }
+        else
+        {
             SystemHealthColor = "#58D6C7";
             SystemHealthBackground = "#0B58D6C7";
             SystemHealthBorder = "#3058D6C7";
-            return;
         }
-
-        SystemHealthHeadline = "SYSTEM ALERT";
-        SystemHealthMessage = string.Join(Environment.NewLine, issues);
-        SystemHealthColor = "#FF6B7A";
-        SystemHealthBackground = "#18FF6B7A";
-        SystemHealthBorder = "#50FF6B7A";
     }
 
     private void UpdateStorageDevices(
@@ -541,7 +591,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         IReadOnlyList<StoragePerformanceSnapshot> performance)
     {
         var selectedId = SelectedStorageDevice?.DeviceId;
-        var performanceById = performance.ToDictionary(item => item.DeviceId, StringComparer.OrdinalIgnoreCase);
+        var performanceById = performance
+            .GroupBy(item => item.DeviceId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
         StorageDevices.Clear();
 
         foreach (var device in devices)
@@ -569,19 +621,70 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         foreach (var snapshot in snapshots)
             Processes.Add(new ProcessTelemetryItem(snapshot));
 
-        var busiest = snapshots.FirstOrDefault();
-        ProcessSummary = busiest is null
-            ? "No process telemetry is available"
-            : $"{snapshots.Count} active entries · highest CPU: {busiest.Name} ({busiest.CpuPercent:0.0}%)";
+        UpdateProcessSummary();
     }
 
     private bool FilterProcess(object item)
     {
-        if (item is not ProcessTelemetryItem process || string.IsNullOrWhiteSpace(ProcessFilter))
+        if (item is not ProcessTelemetryItem process)
+            return false;
+        if (!ProcessCategoryFilter.Equals("General", StringComparison.OrdinalIgnoreCase) &&
+            !process.Category.ToString().Equals(ProcessCategoryFilter.TrimEnd('s'), StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (string.IsNullOrWhiteSpace(ProcessFilter))
             return true;
         var filter = ProcessFilter.Trim();
         return process.DisplayName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
                process.ProcessId.ToString().Contains(filter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void SetProcessCategory(object? parameter)
+    {
+        if (parameter is not string category ||
+            category is not ("General" or "Apps" or "Games"))
+            return;
+        ProcessCategoryFilter = category;
+        ProcessView.Refresh();
+        UpdateProcessSummary();
+    }
+
+    private void UpdateProcessSummary()
+    {
+        var visible = ProcessView.Cast<ProcessTelemetryItem>().ToList();
+        var busiest = visible.OrderByDescending(item => item.CpuValue).FirstOrDefault();
+        var label = ProcessCategoryFilter.Equals("General", StringComparison.OrdinalIgnoreCase)
+            ? "active"
+            : ProcessCategoryFilter.ToLowerInvariant();
+        ProcessSummary = busiest is null
+            ? $"No {label} process telemetry is available"
+            : $"{visible.Count} {label} entries · highest CPU: {busiest.DisplayName} ({busiest.CpuValue:0.0}%)";
+    }
+
+    private void EndProcess(object? parameter)
+    {
+        if (parameter is not ProcessTelemetryItem item)
+            return;
+        if (item.ProcessId == Environment.ProcessId)
+        {
+            StatusMessage = "SystemPulse cannot end its own monitoring process from this page.";
+            return;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(item.ProcessId);
+            if (process.StartTime.ToUniversalTime().Ticks != item.StartTimeUtcTicks)
+                throw new InvalidOperationException("The original process has already exited.");
+            process.Kill(entireProcessTree: true);
+            Processes.Remove(item);
+            ProcessView.Refresh();
+            UpdateProcessSummary();
+            StatusMessage = $"Ended {item.DisplayName} and its child processes.";
+        }
+        catch (Exception exception)
+        {
+            StatusMessage = $"Could not end {item.DisplayName}: {exception.Message}";
+        }
     }
 
     private void SortProcesses(object? parameter)
@@ -691,7 +794,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     public void IgnoreUpdate(Version version)
     {
-        _settings.IgnoredUpdateVersion = version.ToString(3);
+        _settings.IgnoredUpdateVersion = UpdateService.FormatVersion(version);
         SaveSetting();
     }
 
@@ -935,6 +1038,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             PhysicalLocation = device.PhysicalLocation;
             UnsafeShutdowns = device.UnsafeShutdowns;
             HealthDataSource = device.HealthDataSource;
+            VolumeCapacityBytes = device.VolumeCapacityBytes;
+            UsedCapacityBytes = device.UsedCapacityBytes;
             Load = performance?.Load;
             ReadBytesPerSecond = performance?.ReadBytesPerSecond;
             WriteBytesPerSecond = performance?.WriteBytesPerSecond;
@@ -960,19 +1065,30 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         public string PhysicalLocation { get; }
         public ulong? UnsafeShutdowns { get; }
         public string HealthDataSource { get; }
+        public ulong? VolumeCapacityBytes { get; }
+        public ulong? UsedCapacityBytes { get; }
         public float? Load { get; }
         public ulong? ReadBytesPerSecond { get; }
         public ulong? WriteBytesPerSecond { get; }
         public string RemainingLife => Wear.HasValue ? $"{Math.Max(0, 100 - Wear.Value)}% estimated" : "Not reported";
         public string WearText => Wear.HasValue ? $"{Wear.Value}% used" : "Not reported";
         public string PowerOnHoursText => PowerOnHours.HasValue ? $"{PowerOnHours:N0} hours" : "Not reported";
-        public string MaximumTemperatureText => TemperatureMaximum.HasValue ? $"{TemperatureMaximum:0} °C recorded" : "Waiting for temperature data";
+        public string MaximumTemperatureText => TemperatureMaximum.HasValue ? $"{TemperatureMaximum:0} °C" : "Waiting for temperature data";
         public string ErrorSummary => ReadErrorsTotal.HasValue || WriteErrorsTotal.HasValue || ReadErrorsUncorrected.HasValue || WriteErrorsUncorrected.HasValue
             ? $"Read {(ReadErrorsTotal ?? 0):N0} · write {(WriteErrorsTotal ?? 0):N0} · uncorrected {(ReadErrorsUncorrected ?? 0) + (WriteErrorsUncorrected ?? 0):N0}"
             : "Not reported by drive";
         public string UnsafeShutdownsText => UnsafeShutdowns.HasValue ? $"{UnsafeShutdowns:N0} unsafe shutdown(s)" : "Unsafe shutdowns not reported";
         public string HealthColor => Health switch { "Unhealthy" => "#FF6B7A", "Warning" => "#FFB454", "Healthy" => "#58D6C7", _ => "#959DAF" };
         public string CapacityText => FormatSize(SizeBytes);
+        public double CapacityUsedPercent => VolumeCapacityBytes is > 0 && UsedCapacityBytes.HasValue
+            ? Math.Clamp(UsedCapacityBytes.Value * 100d / VolumeCapacityBytes.Value, 0, 100)
+            : 0;
+        public string CapacityUsedPercentText => VolumeCapacityBytes is > 0 && UsedCapacityBytes.HasValue
+            ? $"{CapacityUsedPercent:0}% used"
+            : "Usage unavailable";
+        public string CapacityUsageDetail => VolumeCapacityBytes is > 0 && UsedCapacityBytes.HasValue
+            ? $"{FormatSize(UsedCapacityBytes)} of {FormatSize(VolumeCapacityBytes)} used · {FormatSize(VolumeCapacityBytes.Value - Math.Min(VolumeCapacityBytes.Value, UsedCapacityBytes.Value))} free"
+            : "Windows did not expose a mounted volume for this physical drive.";
         public string InterfaceText => $"{MediaType} · {BusType}";
         public string TemperatureText => FormatTemperature(Temperature);
         public string ActivityText => FormatPercent(Load);
@@ -994,11 +1110,19 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             ProcessId = application.ProcessId;
             DisplayName = application.DisplayName;
             FrameTimeMilliseconds = application.FrameTimeMilliseconds;
+            FrameTimeP95Milliseconds = application.FrameTimeP95Milliseconds;
+            FrameTimeMaximumMilliseconds = application.FrameTimeMaximumMilliseconds;
+            FrameTimeDeviationMilliseconds = application.FrameTimeDeviationMilliseconds;
+            StutterPercent = application.StutterPercent;
         }
 
         public int ProcessId { get; }
         public string DisplayName { get; }
         public float? FrameTimeMilliseconds { get; }
+        public float? FrameTimeP95Milliseconds { get; }
+        public float? FrameTimeMaximumMilliseconds { get; }
+        public float? FrameTimeDeviationMilliseconds { get; }
+        public float? StutterPercent { get; }
     }
 
     public sealed class ProcessTelemetryItem
@@ -1007,26 +1131,32 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         {
             ProcessId = process.ProcessId;
             DisplayName = process.Name;
+            StartTimeUtcTicks = process.StartTimeUtcTicks;
             Cpu = $"{process.CpuPercent:0.0}%";
             Memory = FormatBytes(process.WorkingSetBytes);
             DiskRead = FormatRate(process.ReadBytesPerSecond);
             DiskWrite = FormatRate(process.WriteBytesPerSecond);
             CpuValue = process.CpuPercent;
+            GpuValue = process.GpuPercent;
             MemoryBytes = process.WorkingSetBytes;
             DiskReadBytesPerSecond = process.ReadBytesPerSecond;
             DiskWriteBytesPerSecond = process.WriteBytesPerSecond;
+            Category = process.Category;
         }
 
         public int ProcessId { get; }
+        public long StartTimeUtcTicks { get; }
         public string DisplayName { get; }
         public string Cpu { get; }
         public string Memory { get; }
         public string DiskRead { get; }
         public string DiskWrite { get; }
         public double CpuValue { get; }
+        public double GpuValue { get; }
         public ulong MemoryBytes { get; }
         public ulong DiskReadBytesPerSecond { get; }
         public ulong DiskWriteBytesPerSecond { get; }
+        public ProcessCategory Category { get; }
     }
 
     public sealed class NetworkAdapterItem
@@ -1063,7 +1193,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         {
             Timestamp = sample.Timestamp.ToString("MMM d, HH:mm:ss");
             Cpu = $"{FormatTemperature(sample.CpuTemperature)} · {FormatPercent(sample.CpuLoad)}";
-            Gpu = $"{FormatTemperature(sample.GpuTemperature)} · {FormatPercent(sample.GpuLoad)}";
+            Gpu = $"Core {FormatTemperature(sample.GpuTemperature)} · Hotspot {FormatTemperature(sample.GpuHotspotTemperature)} · {FormatPercent(sample.GpuLoad)}";
             Memory = FormatPercent(sample.MemoryLoad);
             Storage = $"{FormatTemperature(sample.StorageTemperature)} · {FormatPercent(sample.StorageLoad)}";
         }

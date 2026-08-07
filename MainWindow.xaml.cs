@@ -18,10 +18,12 @@ namespace SystemPulse;
 
 public partial class MainWindow : Window
 {
+    private readonly bool _startInBackground;
     private readonly MainViewModel _viewModel;
     private readonly TrayIconService _trayIcon;
     private readonly UpdateService _updateService = new();
     private readonly OverclockService _overclockService = new();
+    private readonly GameModeService _gameModeService = new();
     private readonly DispatcherTimer _updateCheckTimer = new()
     {
         Interval = TimeSpan.FromSeconds(120)
@@ -33,13 +35,23 @@ public partial class MainWindow : Window
     private bool _isPromptingUpdate;
     private bool _isDetectingOverclock;
     private bool _isApplyingOverclock;
+    private bool _isChangingGameMode;
     private bool _isDarkTheme = true;
 
-    public MainWindow()
+    public MainWindow(bool startInBackground = false)
     {
+        _startInBackground = startInBackground;
         InitializeComponent();
+        if (_startInBackground)
+        {
+            ShowActivated = false;
+            ShowInTaskbar = false;
+            WindowState = WindowState.Minimized;
+        }
         FitInitialWindowToWorkArea();
         SetUpdateIconAnimation(updateAvailable: false);
+        RefreshGameModeUi();
+        _gameModeService.SetSessionAwake(_gameModeService.IsEnabled);
         _viewModel = new MainViewModel();
         DataContext = _viewModel;
         _trayIcon = new TrayIconService(ShowFromTray, ExitFromTray);
@@ -61,18 +73,28 @@ public partial class MainWindow : Window
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
-        await _viewModel.StartAsync();
-        var startupUpdate = await CheckForUpdatesAsync(showCurrentResult: false);
-        if (startupUpdate is not null)
+        try
         {
-            await HandleDetectedUpdateAsync(startupUpdate);
-            if (_isInstallingUpdate)
-                return;
+            if (_startInBackground)
+                Hide();
+            await _viewModel.StartAsync();
+            var startupUpdate = await CheckForUpdatesAsync(showCurrentResult: false);
+            if (startupUpdate is not null)
+            {
+                await HandleDetectedUpdateAsync(startupUpdate);
+                if (_isInstallingUpdate)
+                    return;
+            }
+            await InitializeOverclockPageAsync();
+            _updateCheckTimer.Start();
+            if (_viewModel.StartMinimized && _viewModel.MinimizeToTray)
+                Hide();
         }
-        await InitializeOverclockPageAsync();
-        _updateCheckTimer.Start();
-        if (_viewModel.StartMinimized && _viewModel.MinimizeToTray)
-            Hide();
+        catch (Exception exception)
+        {
+            _updateCheckTimer.Start();
+            UpdateButton.ToolTip = $"A startup service could not initialize: {exception.Message}";
+        }
     }
 
     private void OnClosed(object? sender, EventArgs e)
@@ -80,6 +102,7 @@ public partial class MainWindow : Window
         _updateCheckTimer.Stop();
         _trayIcon.Dispose();
         _updateService.Dispose();
+        FanControlPage.Dispose();
         _viewModel.Dispose();
     }
 
@@ -129,12 +152,28 @@ public partial class MainWindow : Window
         PerformanceScroller.ScrollToTop();
     }
 
+    private async void FanControlNav_Click(object sender, RoutedEventArgs e)
+    {
+        ShowPage(FanControlPage);
+        if (FanControlPage.ViewModel.Channels.Count == 0)
+            await FanControlPage.ViewModel.DiscoverAsync();
+    }
+
     private async void OverclockNav_Click(object sender, RoutedEventArgs e)
     {
         ShowPage(OverclockPage);
         OverclockScroller.ScrollToTop();
         if (_overclockCapabilities is null)
-            await InitializeOverclockPageAsync();
+        {
+            try
+            {
+                await InitializeOverclockPageAsync();
+            }
+            catch (Exception exception)
+            {
+                OverclockStatusText.Text = $"Tuning detection unavailable: {exception.Message}";
+            }
+        }
     }
 
     private void SensorsNav_Click(object sender, RoutedEventArgs e)
@@ -174,7 +213,7 @@ public partial class MainWindow : Window
 
     private void ShowPage(UIElement page)
     {
-        foreach (var item in new UIElement[] { OverviewPage, PerformancePage, OverclockPage, ProcessesPage, NetworkPage, StorageHealthPage, HistoryPage, SensorDetailsPage, StorageCleanupPage })
+        foreach (var item in new UIElement[] { OverviewPage, PerformancePage, FanControlPage, OverclockPage, ProcessesPage, NetworkPage, StorageHealthPage, HistoryPage, SensorDetailsPage, StorageCleanupPage })
             item.Visibility = ReferenceEquals(item, page) ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -182,8 +221,18 @@ public partial class MainWindow : Window
     {
         Dispatcher.Invoke(() =>
         {
-            Show();
-            WindowState = WindowState.Normal;
+            var restoredState = WindowState == WindowState.Minimized
+                ? WindowState.Normal
+                : WindowState;
+
+            // Background update launches intentionally disable activation. Re-enable it
+            // before showing the window because WPF cannot show a maximized window while
+            // ShowActivated is false.
+            ShowActivated = true;
+            ShowInTaskbar = true;
+            WindowState = restoredState;
+            if (!IsVisible)
+                Show();
             Activate();
         });
     }
@@ -246,6 +295,51 @@ public partial class MainWindow : Window
             RamCleanupButton.ToolTip = "Trim reclaimable physical memory from user applications";
             RamCleanupButton.IsEnabled = true;
         }
+    }
+
+    private async void GameModeButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isChangingGameMode)
+            return;
+
+        _isChangingGameMode = true;
+        GameModeButton.IsEnabled = false;
+        var wasEnabled = _gameModeService.IsEnabled;
+        GameModeButtonLabel.Text = wasEnabled ? "Restoring…" : "Enabling…";
+        try
+        {
+            var result = wasEnabled
+                ? await _gameModeService.DisableAsync()
+                : await _gameModeService.EnableAsync();
+            if (result.Success)
+                _gameModeService.SetSessionAwake(!wasEnabled);
+            GameModeButton.ToolTip = result.Message;
+            if (!result.Success)
+                MessageBox.Show(this, result.Message, "SystemPulse Game Mode", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (Exception exception)
+        {
+            GameModeButton.ToolTip = $"Game Mode could not be changed: {exception.Message}";
+            MessageBox.Show(this, GameModeButton.ToolTip.ToString(), "SystemPulse Game Mode", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            _isChangingGameMode = false;
+            GameModeButton.IsEnabled = true;
+            RefreshGameModeUi();
+        }
+    }
+
+    private void RefreshGameModeUi()
+    {
+        if (GameModeButton is null || GameModeButtonLabel is null)
+            return;
+
+        var enabled = _gameModeService.IsEnabled;
+        GameModeButtonLabel.Text = enabled ? "Game Mode: On" : "Game Mode: Off";
+        GameModeButton.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, enabled ? "Purple" : "SurfaceRaised");
+        GameModeButton.SetResourceReference(System.Windows.Controls.Control.ForegroundProperty, enabled ? "WindowBackground" : "TextPrimary");
+        GameModeButton.SetResourceReference(System.Windows.Controls.Control.BorderBrushProperty, enabled ? "Purple" : "BorderBrush");
     }
 
     private static string FormatMemorySize(long bytes)
@@ -374,12 +468,17 @@ public partial class MainWindow : Window
         if (confirmation != MessageBoxResult.Yes)
             return;
 
-        SetCpuTuningBusy(true, "Applying verified Intel CPU controlsâ€¦");
+        SetCpuTuningBusy(true, "Applying verified Intel CPU controls...");
         try
         {
             var result = await _overclockService.ApplyCpuAsync(_overclockCapabilities, profile);
             CpuTuningResultText.Text = result.Message;
             OverclockStatusText.Text = result.Success ? "CPU profile applied" : "CPU profile rejected";
+        }
+        catch (Exception exception)
+        {
+            CpuTuningResultText.Text = $"CPU tuning failed safely: {exception.Message}";
+            OverclockStatusText.Text = "CPU profile rejected";
         }
         finally
         {
@@ -401,7 +500,7 @@ public partial class MainWindow : Window
         if (confirmation != MessageBoxResult.Yes)
             return;
 
-        SetCpuTuningBusy(true, "Restoring Intel CPU baselineâ€¦");
+        SetCpuTuningBusy(true, "Restoring Intel CPU baseline...");
         try
         {
             var result = await _overclockService.ResetCpuAsync(_overclockCapabilities);
@@ -409,6 +508,11 @@ public partial class MainWindow : Window
             OverclockStatusText.Text = result.Success ? "CPU baseline restored" : "CPU reset needs attention";
             if (result.Success)
                 await InitializeOverclockPageAsync();
+        }
+        catch (Exception exception)
+        {
+            CpuTuningResultText.Text = $"CPU baseline restore failed safely: {exception.Message}";
+            OverclockStatusText.Text = "CPU reset needs attention";
         }
         finally
         {
@@ -504,6 +608,11 @@ public partial class MainWindow : Window
             GpuTuningResultText.Text = result.Message;
             OverclockStatusText.Text = result.Success ? "GPU profile applied" : "GPU profile rejected";
         }
+        catch (Exception exception)
+        {
+            GpuTuningResultText.Text = $"GPU tuning failed safely: {exception.Message}";
+            OverclockStatusText.Text = "GPU profile rejected";
+        }
         finally
         {
             SetGpuTuningBusy(false, null);
@@ -532,6 +641,11 @@ public partial class MainWindow : Window
             OverclockStatusText.Text = result.Success ? "GPU defaults restored" : "GPU reset needs attention";
             if (result.Success)
                 await InitializeOverclockPageAsync();
+        }
+        catch (Exception exception)
+        {
+            GpuTuningResultText.Text = $"GPU default restore failed safely: {exception.Message}";
+            OverclockStatusText.Text = "GPU reset needs attention";
         }
         finally
         {
@@ -581,6 +695,21 @@ public partial class MainWindow : Window
         _ = changelog.ShowDialog();
     }
 
+    private void SuggestionsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.PerformanceSuggestions.Count == 0)
+            return;
+
+        var suggestions = new SuggestionsWindow(
+            _viewModel.PerformanceSuggestionsTitle,
+            _viewModel.PerformanceSuggestions.ToArray(),
+            _viewModel.PerformanceCloseCandidates.ToArray())
+        {
+            Owner = this
+        };
+        _ = suggestions.ShowDialog();
+    }
+
     private void CleanupTextBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (sender is not TextBox textBox)
@@ -595,14 +724,22 @@ public partial class MainWindow : Window
 
     private async void UpdateButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_isInstallingUpdate)
-            return;
+        try
+        {
+            if (_isInstallingUpdate)
+                return;
 
-        var release = _availableUpdate ?? await CheckForUpdatesAsync(showCurrentResult: true);
-        if (release is null)
-            return;
+            var release = _availableUpdate ?? await CheckForUpdatesAsync(showCurrentResult: true);
+            if (release is null)
+                return;
 
-        await InstallUpdateAsync(release, showErrors: true);
+            await InstallUpdateAsync(release, showErrors: true);
+        }
+        catch (Exception exception)
+        {
+            UpdateButton.IsEnabled = true;
+            UpdateButton.ToolTip = $"Update check failed: {exception.Message}";
+        }
     }
 
     private async Task InstallUpdateAsync(UpdateRelease release, bool showErrors)
@@ -661,11 +798,18 @@ public partial class MainWindow : Window
 
     private async void UpdateCheckTimer_Tick(object? sender, EventArgs e)
     {
-        if (!_isInstallingUpdate)
+        try
         {
-            var release = await CheckForUpdatesAsync(showCurrentResult: false);
-            if (release is not null)
-                await HandleDetectedUpdateAsync(release);
+            if (!_isInstallingUpdate)
+            {
+                var release = await CheckForUpdatesAsync(showCurrentResult: false);
+                if (release is not null)
+                    await HandleDetectedUpdateAsync(release);
+            }
+        }
+        catch (Exception exception)
+        {
+            UpdateButton.ToolTip = $"Automatic update check failed: {exception.Message}";
         }
     }
 
@@ -693,7 +837,7 @@ public partial class MainWindow : Window
             {
                 _availableUpdate = null;
                 SetUpdateIconAnimation(updateAvailable: false);
-                UpdateButton.ToolTip = $"SystemPulse {UpdateService.CurrentVersion.ToString(3)} is up to date";
+                UpdateButton.ToolTip = $"SystemPulse {UpdateService.FormatVersion(UpdateService.CurrentVersion)} is up to date";
                 if (showCurrentResult)
                     MessageBox.Show(this, "You already have the latest version.", "SystemPulse update", MessageBoxButton.OK, MessageBoxImage.Information);
                 return null;

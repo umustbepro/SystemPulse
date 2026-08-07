@@ -27,6 +27,7 @@ public sealed class HardwareMonitorService : IDisposable
                 var cpu = _cpuTemperature.Read();
                 var memory = _system.ReadMemory();
                 var gpu = _gpu.Read();
+                var gpuHotspot = _motherboard.ReadGpuHotspotTemperature(gpu.Name, gpu.PhysicalIndex);
                 if (!gpu.Voltage.HasValue)
                 {
                     var libreVoltage = _motherboard.ReadGpuVoltage(gpu.Name, gpu.PhysicalIndex);
@@ -60,6 +61,8 @@ public sealed class HardwareMonitorService : IDisposable
                     cpu.PackagePowerWatts,
                     cpu.ElectricalSource,
                     gpu.Temperature,
+                    gpuHotspot.Temperature,
+                    gpuHotspot.Source,
                     gpu.Load,
                     gpu.Voltage,
                     gpu.PowerWatts,
@@ -90,7 +93,7 @@ public sealed class HardwareMonitorService : IDisposable
             {
                 return new SensorSnapshot(
                     null, "PawnIO unavailable", null, null, null, "CPU electrical telemetry unavailable",
-                    null, null, null, null, "GPU electrical telemetry unavailable", null, null, null, null, null, null,
+                    null, null, "GPU hotspot sensor unavailable", null, null, null, "GPU electrical telemetry unavailable", null, null, null, null, null, null,
                     _system.CpuName, "GPU", "System memory", Array.Empty<StorageDeviceSnapshot>(),
                     Array.Empty<StoragePerformanceSnapshot>(), null, "No active 3D presentation",
                     Array.Empty<FrameApplicationSnapshot>(),

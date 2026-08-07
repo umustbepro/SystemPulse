@@ -7,7 +7,7 @@ namespace SystemPulse.Services;
 
 internal sealed class TelemetryHistoryService
 {
-    private const string Header = "timestamp,cpu_temperature_c,cpu_load_percent,gpu_temperature_c,gpu_load_percent,memory_load_percent,storage_temperature_c,storage_load_percent";
+    private const string Header = "timestamp,cpu_temperature_c,cpu_load_percent,gpu_temperature_c,gpu_hotspot_temperature_c,gpu_load_percent,memory_load_percent,storage_temperature_c,storage_load_percent";
     private readonly string _folder;
     private DateTime _lastWrite = DateTime.MinValue;
 
@@ -26,10 +26,13 @@ internal sealed class TelemetryHistoryService
 
         _lastWrite = sample.Timestamp;
         var path = Path.Combine(_folder, $"telemetry-{sample.Timestamp:yyyy-MM-dd}.csv");
-        if (!File.Exists(path))
+        var includesHotspot = !File.Exists(path);
+        if (includesHotspot)
             File.WriteAllText(path, Header + Environment.NewLine, new UTF8Encoding(true));
+        else
+            includesHotspot = File.ReadLines(path).FirstOrDefault()?.Contains("gpu_hotspot_temperature_c", StringComparison.OrdinalIgnoreCase) == true;
 
-        File.AppendAllText(path, ToCsv(sample) + Environment.NewLine, Encoding.UTF8);
+        File.AppendAllText(path, (includesHotspot ? ToCsv(sample) : ToLegacyCsv(sample)) + Environment.NewLine, Encoding.UTF8);
         DeleteExpired(Math.Clamp(retentionDays, 1, 90));
         return true;
     }
@@ -44,7 +47,8 @@ internal sealed class TelemetryHistoryService
             foreach (var line in File.ReadLines(file))
             {
                 if (first) { first = false; continue; }
-                if (!string.IsNullOrWhiteSpace(line)) writer.WriteLine(line);
+                if (!string.IsNullOrWhiteSpace(line) && Parse(line) is { } sample)
+                    writer.WriteLine(ToCsv(sample));
             }
         }
     }
@@ -70,6 +74,12 @@ internal sealed class TelemetryHistoryService
     private static string ToCsv(HistorySample value) => string.Join(',',
         value.Timestamp.ToString("O", CultureInfo.InvariantCulture),
         Number(value.CpuTemperature), Number(value.CpuLoad), Number(value.GpuTemperature),
+        Number(value.GpuHotspotTemperature), Number(value.GpuLoad), Number(value.MemoryLoad),
+        Number(value.StorageTemperature), Number(value.StorageLoad));
+
+    private static string ToLegacyCsv(HistorySample value) => string.Join(',',
+        value.Timestamp.ToString("O", CultureInfo.InvariantCulture),
+        Number(value.CpuTemperature), Number(value.CpuLoad), Number(value.GpuTemperature),
         Number(value.GpuLoad), Number(value.MemoryLoad), Number(value.StorageTemperature), Number(value.StorageLoad));
 
     private static string Number(float? value) => value?.ToString("0.###", CultureInfo.InvariantCulture) ?? string.Empty;
@@ -77,9 +87,11 @@ internal sealed class TelemetryHistoryService
     private static HistorySample? Parse(string line)
     {
         var parts = line.Split(',');
-        if (parts.Length != 8 || !DateTime.TryParse(parts[0], CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var timestamp))
+        if (parts.Length is not (8 or 9) || !DateTime.TryParse(parts[0], CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var timestamp))
             return null;
-        return new HistorySample(timestamp, Float(parts[1]), Float(parts[2]), Float(parts[3]), Float(parts[4]), Float(parts[5]), Float(parts[6]), Float(parts[7]));
+        return parts.Length == 9
+            ? new HistorySample(timestamp, Float(parts[1]), Float(parts[2]), Float(parts[3]), Float(parts[4]), Float(parts[5]), Float(parts[6]), Float(parts[7]), Float(parts[8]))
+            : new HistorySample(timestamp, Float(parts[1]), Float(parts[2]), Float(parts[3]), null, Float(parts[4]), Float(parts[5]), Float(parts[6]), Float(parts[7]));
     }
 
     private static float? Float(string value) => float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var result) ? result : null;

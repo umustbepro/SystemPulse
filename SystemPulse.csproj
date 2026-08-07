@@ -12,17 +12,17 @@
     <Platforms>x64</Platforms>
     <AssemblyName>SystemPulse</AssemblyName>
     <RootNamespace>SystemPulse</RootNamespace>
-    <Version>0.8.7</Version>
-    <AssemblyVersion>0.8.7.0</AssemblyVersion>
-    <FileVersion>0.8.7.0</FileVersion>
-    <InformationalVersion>0.8.7</InformationalVersion>
+    <Version>0.9.5</Version>
+    <AssemblyVersion>0.9.5.0</AssemblyVersion>
+    <FileVersion>0.9.5.0</FileVersion>
+    <InformationalVersion>0.9.5</InformationalVersion>
     <GitHubRepository Condition="'$(GitHubRepository)' == ''">umustbepro/SystemPulse</GitHubRepository>
     <ApplicationIcon>Assets\SystemPulse.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <AssemblyMetadata Include="GitHubRepository" Value="$(GitHubRepository)" />
-    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.7-pre715" />
     <PackageReference Include="System.Management" Version="10.0.10" />
     <Resource Include="Assets\SystemPulse.ico" />
   </ItemGroup>
@@ -55,17 +55,4 @@
     </Content>
   </ItemGroup>
 
-  <!-- LibreHardwareMonitor is enabled for motherboard/controller sensors and GPU
-       voltage fallback. These storage, RAM-SPD, and Unix assets are not reachable. -->
-  <Target Name="RemoveUnusedLibreRuntimeAssets" AfterTargets="ComputeFilesToPublish" BeforeTargets="_ComputeFilesToBundle">
-    <ItemGroup>
-      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
-        Condition="'%(Filename)' == 'DiskInfoToolkit' Or
-                   '%(Filename)' == 'RAMSPDToolkit-NDD' Or
-                   '%(Filename)' == 'BlackSharp.Core' Or
-                   '%(Filename)' == 'Mono.Posix.NETStandard' Or
-                   '%(Filename)' == 'MonoPosixHelper' Or
-                   '%(Filename)' == 'libMonoPosixHelper'" />
-    </ItemGroup>
-  </Target>
 </Project>
